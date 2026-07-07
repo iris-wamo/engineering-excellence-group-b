@@ -15,6 +15,7 @@ build-backend = "uv_build"
 
 [tool.uv.build-backend]
 module-root = ""
+module-name = "app"
 
 [dependency-groups]
 dev = [

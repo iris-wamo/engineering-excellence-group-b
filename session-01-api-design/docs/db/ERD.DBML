@@ -11,7 +11,7 @@ Enum task_priority {
 }
 
 Enum project_role {
-  admin
+  owner
   member
 }
 
@@ -28,7 +28,6 @@ Table project {
   id integer [pk, increment]
   name varchar(150) [not null]
   description text
-  owner_id integer [not null]
   created_at timestamptz [not null, default: `now()`]
   updated_at timestamptz [not null, default: `now()`]
 }
@@ -54,11 +53,10 @@ Table project_user {
 
   indexes {
     (project_id, user_id) [pk]
+    (project_id, role) [note: 'migration: partial UNIQUE index WHERE role = owner — enforces at most one owner per project']
   }
 }
 
-
-Ref: project.owner_id > user.id [delete: restrict]
 
 Ref: task.project_id > project.id [delete: cascade]
 

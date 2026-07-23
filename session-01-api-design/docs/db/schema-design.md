@@ -13,20 +13,22 @@ so it can be edited and re rendered later.
 
 For this first version we have four tables:
 
-- **user** — people on the team. A user can own projects, be a member of projects, and
-  be assigned tasks.
-- **project** — a table that groups related tasks. Every project has one owner.
+- **user** — people on the team. A user can be a member of projects and be assigned
+  tasks.
+- **project** — a table that groups related tasks.
 - **task** — the actual unit of work. Every task belongs to a project and can optionally
   be assigned to one user.
-- **project_user** — the membership link between users and projects (many to many).
+- **project_user** — the membership link between users and projects (many to many),
+  including ownership.
 
 The relationships are:
 
-- One user owns many projects. Each project has exactly one owner (`project.owner_id`).
 - One project has many tasks. Each task belongs to exactly one project.
 - One user can be assigned many tasks. Each task has at most one assignee (or none).
 - Users and projects have a many to many membership: a user can be on many projects, and
   a project can have many members. This is handled by the `project_user` table.
+- Ownership is represented as a role on that membership, so each project has exactly one
+  member with the `owner` role.
 
 ## Tables
 
@@ -53,14 +55,13 @@ plain `varchar` with a unique constraint for now.
 |-------------|--------------|---------------------------------------------|----------------------------|
 | id          | integer      | PK, auto increment                          | Primary key                |
 | name        | varchar(150) | not null                                    | Project name               |
-| description | text         | nullable                                    | Optional description       |
-| owner_id    | integer      | FK -> user.id, not null, ON DELETE RESTRICT | Every project has an owner |
-| created_at  | timestamptz  | not null, default now()                     | Set on insert              |
-| updated_at  | timestamptz  | not null, default now()                     | Refreshed on update        |
+| description | text         | nullable                                    | Optional description |
+| created_at  | timestamptz  | not null, default now() | Set on insert        |
+| updated_at  | timestamptz  | not null, default now() | Refreshed on update  |
 
-`owner_id` is required — a project can't exist without an owner. The delete rule is
-RESTRICT, which means you can't delete a user while they still own projects. This is
-intentional: it stops us from accidentally orphaning projects by removing one account.
+The project table no longer holds an `owner_id`. Ownership is stored once, as a role on
+the `project_user` membership, so there is a single source of truth for the relationship
+between a user and a project.
 
 ### task
 
@@ -96,7 +97,7 @@ Instead the tasks stay and just become unassigned, so the work isn't lost.
 |------------|--------------|-------------------------|------------------------------------|
 | project_id | integer      | PK, FK -> project.id, ON DELETE CASCADE | Part of composite key  |
 | user_id    | integer      | PK, FK -> user.id, ON DELETE CASCADE    | Part of composite key  |
-| role       | project_role | not null, default 'member' | Enum: admin, member             |
+| role       | project_role | not null, default 'member' | Enum: owner, member             |
 | joined_at  | timestamptz  | not null, default now() | When the user joined the project   |
 
 This is the join table that implements the many to many membership between users and
@@ -108,9 +109,17 @@ membership row is only meaningful while both the user and the project exist, so 
 is deleted the membership row is removed (this deletes only the link, not the user's
 tasks or anything else).
 
+**About ownership.** Ownership lives here as `role = 'owner'` rather than as a separate
+`owner_id` column on `project`, so the user to project relationship has a single source
+of truth and there is nothing to keep synchronised when ownership changes.
 
-**About the owner and membership.** The project owner (`project.owner_id`) is also a
-member of the project. When a project is created, the owner should be added to
-`project_user` with role `admin`. — `owner_id` records the single lead, while `project_user` records full team
-membership including the owner.
+To keep the "one owner per project" guarantee, the migration should add a partial unique
+index:
 
+```sql
+CREATE UNIQUE INDEX one_owner_per_project
+  ON project_user (project_id)
+  WHERE role = 'owner';
+```
+
+**About roles.** For now I've collapsed ownership and admin into a single `owner` role, since in practice the same person does both.

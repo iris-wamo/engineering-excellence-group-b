@@ -12,6 +12,9 @@ Every PR in this repository must use the following structure. This applies to ev
 ## Why
 1-2 sentences on the motivation/context, not just a restatement of the summary
 
+## Assumptions Taken (if any)
+- Any assumption made where requirements were ambiguous or unspecified
+
 ## Test plan
 - [x] Actual command run and its real outcome (e.g. `uv run ruff check .` — passes)
 - [x] Actual command run and its real outcome (e.g. `uv run pytest` — runs cleanly, 3 passed)

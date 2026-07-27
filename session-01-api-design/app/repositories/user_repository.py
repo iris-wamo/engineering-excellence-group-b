@@ -1,8 +1,8 @@
-from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.exceptions import EmailAlreadyExistsError
 from app.models.user import User
 
 
@@ -17,10 +17,7 @@ class UserRepository:
             return user
         except IntegrityError:
             db.rollback()
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Email already exists",
-            ) from None
+            raise EmailAlreadyExistsError() from None
 
     @staticmethod
     def get_all(db: Session, *, limit: int = 10, offset: int = 0) -> list[User]:

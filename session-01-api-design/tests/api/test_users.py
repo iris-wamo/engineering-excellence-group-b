@@ -16,6 +16,7 @@ def test_create_user_returns_201_and_payload(client: TestClient) -> None:
     assert body["name"] == "User"
     assert body["email"] == "user@example.com"
     assert body["is_active"] is True
+    assert response.headers.get("location") == f"/users/{body['id']}"
 
 
 def test_create_user_rejects_invalid_email(client: TestClient) -> None:
@@ -25,6 +26,25 @@ def test_create_user_rejects_invalid_email(client: TestClient) -> None:
     )
 
     assert response.status_code == 422
+
+
+def test_create_user_returns_conflict_for_duplicate_email(client: TestClient) -> None:
+    client.post("/users", json={"name": "User", "email": "duplicate@example.com"})
+
+    response = client.post("/users", json={"name": "User", "email": "duplicate@example.com"})
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Email already exists"
+
+
+def test_get_user_returns_created_user_by_id(client: TestClient) -> None:
+    created = client.post("/users", json={"name": "User", "email": "lookup@example.com"}).json()
+
+    response = client.get(f"/users/{created['id']}")
+
+    assert response.status_code == 200
+    assert response.json()["id"] == created["id"]
+    assert response.json()["email"] == "lookup@example.com"
 
 
 def test_get_users_returns_empty_list(client: TestClient) -> None:

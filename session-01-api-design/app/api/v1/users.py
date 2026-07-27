@@ -1,8 +1,9 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
+from app.core.exceptions import EmailAlreadyExistsError, UserNotFoundError
 from app.db.session import get_db
 from app.schemas.user import UserCreate, UserResponse
 from app.services.user_service import UserService
@@ -11,8 +12,20 @@ router = APIRouter(prefix="/users", tags=["Users"])
 
 
 @router.post("", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-def create_user(payload: UserCreate, db: Annotated[Session, Depends(get_db)]) -> UserResponse:
-    user = UserService.create_user(db, payload)
+def create_user(
+    payload: UserCreate,
+    db: Annotated[Session, Depends(get_db)],
+    response: Response,
+) -> UserResponse:
+    try:
+        user = UserService.create_user(db, payload)
+    except EmailAlreadyExistsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Email already exists",
+        ) from exc
+
+    response.headers["location"] = f"/users/{user.id}"
     return UserResponse.model_validate(user)
 
 
@@ -28,5 +41,12 @@ def get_users(
 
 @router.get("/{user_id}", response_model=UserResponse)
 def get_user(user_id: int, db: Annotated[Session, Depends(get_db)]) -> UserResponse:
-    user = UserService.get_user(db, user_id)
+    try:
+        user = UserService.get_user(db, user_id)
+    except UserNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        ) from exc
+
     return UserResponse.model_validate(user)

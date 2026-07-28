@@ -31,6 +31,15 @@ def test_create_user_rejects_duplicate_emails(db_session: Session) -> None:
     assert exc_info.value.detail == "Email already exists"
 
 
+def test_create_user_rejects_duplicate_emails_differing_by_case(db_session: Session) -> None:
+    UserService.create_user(db_session, UserCreate(name="User", email="user@example.com"))
+
+    with pytest.raises(HTTPException) as exc_info:
+        UserService.create_user(db_session, UserCreate(name="User", email="USER@EXAMPLE.COM"))
+
+    assert exc_info.value.status_code == 409
+
+
 def test_get_users_returns_empty_list_when_no_users_exist(db_session: Session) -> None:
     users = UserService.get_users(db_session)
 

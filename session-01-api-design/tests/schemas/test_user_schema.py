@@ -18,3 +18,9 @@ def test_user_create_rejects_blank_name_after_stripping() -> None:
 def test_user_create_rejects_name_longer_than_database_limit() -> None:
     with pytest.raises(ValidationError):
         UserCreate(name="x" * 101, email="user@gmail.com")
+
+
+def test_user_create_normalizes_email_to_lowercase() -> None:
+    user = UserCreate(name="User", email="Abc@Example.com")
+
+    assert user.email == "abc@example.com"

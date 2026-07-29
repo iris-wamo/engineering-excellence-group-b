@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 
-from app.core.exceptions import EmailAlreadyExistsError, UserNotFoundError
+from app.core.exceptions import UserNotFoundError
 from app.models.user import User
 from app.repositories.user_repository import UserRepository
 from app.schemas.user import UserCreate
@@ -9,14 +9,7 @@ from app.schemas.user import UserCreate
 class UserService:
     @staticmethod
     def create_user(db: Session, payload: UserCreate) -> User:
-        existing_user = UserRepository.get_by_email(db, str(payload.email))
-        if existing_user is not None:
-            raise EmailAlreadyExistsError()
-
-        try:
-            return UserRepository.create(db, name=payload.name, email=str(payload.email))
-        except EmailAlreadyExistsError as exc:
-            raise EmailAlreadyExistsError() from exc
+        return UserRepository.create(db, name=payload.name, email=str(payload.email))
 
     @staticmethod
     def get_users(db: Session, *, limit: int = 10, offset: int = 0) -> list[User]:

@@ -12,8 +12,9 @@ class UserService:
         return UserRepository.create(db, name=payload.name, email=str(payload.email))
 
     @staticmethod
-    def get_users(db: Session, *, limit: int = 10, offset: int = 0) -> list[User]:
-        return UserRepository.get_all(db, limit=limit, offset=offset)
+    def get_users(db: Session, *, page: int, page_size: int) -> tuple[list[User], int]:
+        offset = (page - 1) * page_size
+        return UserRepository.get_all(db, limit=page_size, offset=offset)
 
     @staticmethod
     def get_user(db: Session, user_id: int) -> User:

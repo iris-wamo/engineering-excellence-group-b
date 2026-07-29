@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -20,9 +20,12 @@ class UserRepository:
             raise EmailAlreadyExistsError() from None
 
     @staticmethod
-    def get_all(db: Session, *, limit: int = 10, offset: int = 0) -> list[User]:
-        result = db.execute(select(User).order_by(User.id).limit(limit).offset(offset))
-        return list(result.scalars().all())
+    def get_all(db: Session, *, limit: int, offset: int) -> tuple[list[User], int]:
+        total = db.scalar(select(func.count()).select_from(User)) or 0
+
+        users = db.scalars(select(User).order_by(User.id).offset(offset).limit(limit)).all()
+
+        return list(users), total
 
     @staticmethod
     def get_by_id(db: Session, user_id: int) -> User | None:

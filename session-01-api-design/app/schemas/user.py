@@ -56,3 +56,12 @@ class UserResponse(BaseModel):
             ]
         },
     )
+
+
+class UserListResponse(BaseModel):
+    """Schema for a paginated user list response."""
+
+    items: list[UserResponse] = Field(description="The users on this page")
+    total: int = Field(description="Total number of users matching the query")
+    page: int = Field(description="Current page number (1-indexed)")
+    page_size: int = Field(description="Maximum number of users per page")

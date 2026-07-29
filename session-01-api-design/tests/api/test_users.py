@@ -38,9 +38,7 @@ def test_create_user_returns_conflict_for_duplicate_email(client: TestClient) ->
 
 
 def test_get_user_returns_created_user_by_id(client: TestClient) -> None:
-    response = client.post(
-        "/api/v1/users", json={"name": "User", "email": "lookup@example.com"}
-    )
+    response = client.post("/api/v1/users", json={"name": "User", "email": "lookup@example.com"})
     created = response.json()
 
     response = client.get(f"/api/v1/users/{created['id']}")

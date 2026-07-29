@@ -6,12 +6,7 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class ProjectCreate(BaseModel):
-    """Schema for creating a new project.
-
-    Attributes:
-        name: Project name (1-150 characters, must not be empty or whitespace-only).
-        description: Optional project description (max 1000 characters).
-    """
+    """Schema for creating a new project."""
 
     name: str = Field(
         ...,
@@ -71,16 +66,8 @@ class ProjectCreate(BaseModel):
         return v.strip() if v else None
 
 
-class ProjectRead(BaseModel):
-    """Schema for reading project data from the database.
-
-    Attributes:
-        id: Unique project identifier.
-        name: Project name.
-        description: Optional project description.
-        created_at: Timestamp when the project was created.
-        updated_at: Timestamp when the project was last updated.
-    """
+class ProjectResponse(BaseModel):
+    """Schema for returning project details."""
 
     id: int = Field(description="Unique project ID (auto-generated)")
     name: str = Field(description="Project name")
@@ -117,3 +104,12 @@ class ProjectRead(BaseModel):
             ]
         },
     }
+
+
+class ProjectListResponse(BaseModel):
+    """Schema for a paginated project list response."""
+
+    items: list[ProjectResponse] = Field(description="The projects on this page")
+    total: int = Field(description="Total number of projects matching the query")
+    page: int = Field(description="Current page number (1-indexed)")
+    page_size: int = Field(description="Maximum number of projects per page")

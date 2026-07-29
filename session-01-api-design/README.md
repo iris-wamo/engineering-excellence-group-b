@@ -19,6 +19,7 @@ The database design this is built from is documented in
   - [Windows](#windows)
 - [Step 3 — Create the database and user](#step-3--create-the-database-and-user)
 - [Step 4 — Configure and run](#step-4--configure-and-run)
+- [Running tests](#running-tests)
 - [Project layout](#project-layout)
 - [Working with migrations](#working-with-migrations)
 - [Inspecting the database](#inspecting-the-database)
@@ -108,15 +109,17 @@ installation.
 
 ## Step 3 — Create the database and user
 
-This creates a dedicated login role (`taskflow`) and an empty database (`taskflow`) owned
-by it. Do this **once**. The command differs slightly per OS because of how you reach the
-Postgres admin account.
+This creates a dedicated login role (`taskflow`), an empty database (`taskflow`) owned by
+it, and a second `taskflow_test` database used by the test suite (see
+[Running tests](#running-tests)). Do this **once**. The command differs slightly per OS
+because of how you reach the Postgres admin account.
 
 **macOS:**
 
 ```bash
 psql -d postgres -c "CREATE ROLE taskflow WITH LOGIN PASSWORD 'taskflow';"
 psql -d postgres -c "CREATE DATABASE taskflow OWNER taskflow;"
+psql -d postgres -c "CREATE DATABASE taskflow_test OWNER taskflow;"
 ```
 
 **Linux:**
@@ -124,6 +127,7 @@ psql -d postgres -c "CREATE DATABASE taskflow OWNER taskflow;"
 ```bash
 sudo -u postgres psql -c "CREATE ROLE taskflow WITH LOGIN PASSWORD 'taskflow';"
 sudo -u postgres psql -c "CREATE DATABASE taskflow OWNER taskflow;"
+sudo -u postgres psql -c "CREATE DATABASE taskflow_test OWNER taskflow;"
 ```
 
 **Windows** (in "SQL Shell (psql)", or any terminal with psql on the PATH — it will prompt
@@ -132,6 +136,7 @@ for the `postgres` password you set during install):
 ```bat
 psql -U postgres -c "CREATE ROLE taskflow WITH LOGIN PASSWORD 'taskflow';"
 psql -U postgres -c "CREATE DATABASE taskflow OWNER taskflow;"
+psql -U postgres -c "CREATE DATABASE taskflow_test OWNER taskflow;"
 ```
 
 Confirm the new role can actually log in over the network (all platforms):
@@ -166,6 +171,20 @@ The defaults in `.env.example` already match the role and database from Step 3, 
 normally don't need to edit `.env`. Only change `DATABASE_URL` if your Postgres uses a
 different port, user, or password.
 
+
+---
+
+## Running tests
+
+```bash
+uv run pytest
+```
+
+Tests run against the real `taskflow_test` database created in Step 3 (the test DB name is
+derived from `DATABASE_URL` by appending `_test`) — not SQLite — so the schema and
+constraints (enums, unique indexes, etc.) are exercised the same way they are in production.
+Each test creates the tables it needs and drops them afterward, so the database is empty
+between runs.
 
 ---
 

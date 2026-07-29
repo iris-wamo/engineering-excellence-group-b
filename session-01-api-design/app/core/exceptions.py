@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -12,25 +12,7 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 
 
-# User-api errors (predate the shared AppError hierarchy below; kept as-is
-# per ADR-001 so user-api's response contract is left untouched).
-
-
-class EmailAlreadyExistsError(HTTPException):
-    """Raised when a user attempts to create an account with an existing email."""
-
-    def __init__(self) -> None:
-        super().__init__(status_code=status.HTTP_409_CONFLICT, detail="Email already exists")
-
-
-class UserNotFoundError(HTTPException):
-    """Raised when a requested user cannot be found."""
-
-    def __init__(self) -> None:
-        super().__init__(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-
-
-# Shared AppError hierarchy (ADR-001), used by the project resource onward.
+# Shared AppError hierarchy (ADR-001).
 
 
 class ErrorDetail(BaseModel):
@@ -75,6 +57,26 @@ class ValidationAppError(AppError):
 class ConflictError(AppError):
     code = "CONFLICT"
     status_code = status.HTTP_409_CONFLICT
+
+
+class EmailAlreadyExistsError(ConflictError):
+    """Raised when a user attempts to create an account with an existing email."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Email already exists",
+            details=[{"field": "email", "message": "Email already exists"}],
+        )
+
+
+class UserNotFoundError(NotFoundError):
+    """Raised when a requested user cannot be found."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "User not found",
+            details=[{"field": "user_id", "message": "User does not exist"}],
+        )
 
 
 def error_json(status_code: int, code: str, message: str, details: list[dict] | None = None):

@@ -1,7 +1,7 @@
 import pytest
-from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.core.exceptions import ConflictError, NotFoundError
 from app.models.user import User
 from app.repositories.user_repository import UserRepository
 from app.schemas.user import UserCreate
@@ -24,46 +24,47 @@ def test_create_user_rejects_duplicate_emails(db_session: Session) -> None:
 
     UserService.create_user(db_session, payload)
 
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(ConflictError) as exc_info:
         UserService.create_user(db_session, payload)
 
     assert exc_info.value.status_code == 409
-    assert exc_info.value.detail == "Email already exists"
+    assert exc_info.value.message == "Email already exists"
 
 
 def test_create_user_rejects_duplicate_emails_differing_by_case(db_session: Session) -> None:
     UserService.create_user(db_session, UserCreate(name="User", email="user@example.com"))
 
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(ConflictError) as exc_info:
         UserService.create_user(db_session, UserCreate(name="User", email="USER@EXAMPLE.COM"))
 
     assert exc_info.value.status_code == 409
 
 
 def test_get_users_returns_empty_list_when_no_users_exist(db_session: Session) -> None:
-    users = UserService.get_users(db_session)
+    users, total = UserService.get_users(db_session, page=1, page_size=10)
 
     assert users == []
+    assert total == 0
 
 
-def test_get_users_supports_limit_and_offset(db_session: Session) -> None:
+def test_get_users_supports_pagination(db_session: Session) -> None:
     UserRepository.create(db_session, name="User 1", email="user1@example.com")
     UserRepository.create(db_session, name="User 2", email="user2@example.com")
     UserRepository.create(db_session, name="User 3", email="user3@example.com")
 
-    users = UserService.get_users(db_session, limit=2, offset=1)
+    users, total = UserService.get_users(db_session, page=1, page_size=2)
 
-    assert len(users) == 2
-    assert [user.name for user in users] == ["User 2", "User 3"]
+    assert total == 3
+    assert [user.name for user in users] == ["User 1", "User 2"]
 
 
 def test_create_user_rolls_back_on_integrity_error(db_session: Session) -> None:
     UserRepository.create(db_session, name="User 1", email="dup@example.com")
 
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(ConflictError) as exc_info:
         UserRepository.create(db_session, name="User 2", email="dup@example.com")
 
-    assert exc_info.value.status_code == status.HTTP_409_CONFLICT
+    assert exc_info.value.status_code == 409
     assert db_session.query(User).count() == 1
 
 
@@ -77,8 +78,8 @@ def test_get_user_returns_user_by_id(db_session: Session) -> None:
 
 
 def test_get_user_raises_404_for_missing_user(db_session: Session) -> None:
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(NotFoundError) as exc_info:
         UserService.get_user(db_session, 999)
 
-    assert exc_info.value.status_code == status.HTTP_404_NOT_FOUND
-    assert exc_info.value.detail == "User not found"
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.message == "User not found"

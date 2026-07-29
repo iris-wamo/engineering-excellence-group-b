@@ -34,7 +34,9 @@ def test_create_user_returns_conflict_for_duplicate_email(client: TestClient) ->
     response = client.post("/api/v1/users", json={"name": "User", "email": "duplicate@example.com"})
 
     assert response.status_code == 409
-    assert response.json()["detail"] == "Email already exists"
+    body = response.json()
+    assert body["error"]["code"] == "CONFLICT"
+    assert body["error"]["message"] == "Email already exists"
 
 
 def test_get_user_returns_created_user_by_id(client: TestClient) -> None:
@@ -52,14 +54,20 @@ def test_get_users_returns_empty_list(client: TestClient) -> None:
     response = client.get("/api/v1/users")
 
     assert response.status_code == 200
-    assert response.json() == []
+    body = response.json()
+    assert body["items"] == []
+    assert body["total"] == 0
+    assert body["page"] == 1
+    assert body["page_size"] == 10
 
 
 def test_get_user_returns_404_for_missing_user(client: TestClient) -> None:
     response = client.get("/api/v1/users/99900000")
 
     assert response.status_code == 404
-    assert response.json()["detail"] == "User not found"
+    body = response.json()
+    assert body["error"]["code"] == "NOT_FOUND"
+    assert body["error"]["message"] == "User not found"
 
 
 def test_get_users_supports_pagination(client: TestClient, db_session: Session) -> None:
@@ -67,9 +75,11 @@ def test_get_users_supports_pagination(client: TestClient, db_session: Session) 
     UserService.create_user(db_session, UserCreate(name="User 2", email="user2@example.com"))
     UserService.create_user(db_session, UserCreate(name="User 3", email="user3@example.com"))
 
-    response = client.get("/api/v1/users?limit=2&offset=1")
+    response = client.get("/api/v1/users?page=1&page_size=2")
 
     assert response.status_code == 200
     body = response.json()
-    assert len(body) == 2
-    assert [item["name"] for item in body] == ["User 2", "User 3"]
+    assert body["total"] == 3
+    assert body["page"] == 1
+    assert body["page_size"] == 2
+    assert [item["name"] for item in body["items"]] == ["User 1", "User 2"]

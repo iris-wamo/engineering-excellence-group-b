@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ProjectCreate(BaseModel):
@@ -26,8 +26,8 @@ class ProjectCreate(BaseModel):
         ],
     )
 
-    model_config = {
-        "json_schema_extra": {
+    model_config = ConfigDict(
+        json_schema_extra={
             "examples": [
                 {
                     "name": "PeopleUp",
@@ -47,7 +47,7 @@ class ProjectCreate(BaseModel):
                 },
             ]
         }
-    }
+    )
 
     @field_validator("name")
     @classmethod
@@ -75,9 +75,9 @@ class ProjectResponse(BaseModel):
     created_at: datetime = Field(description="ISO 8601 timestamp of project creation")
     updated_at: datetime = Field(description="ISO 8601 timestamp of last update")
 
-    model_config = {
-        "from_attributes": True,
-        "json_schema_extra": {
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_schema_extra={
             "examples": [
                 {
                     "id": 1,
@@ -103,7 +103,7 @@ class ProjectResponse(BaseModel):
                 },
             ]
         },
-    }
+    )
 
 
 class ProjectListResponse(BaseModel):

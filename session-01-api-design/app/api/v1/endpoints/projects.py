@@ -12,78 +12,13 @@ from app.services.project_service import ProjectService
 router = APIRouter(prefix="/projects", tags=["projects"])
 
 
-@router.post(
-    "",
-    response_model=ProjectResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Create a new project",
-    responses={
-        201: {
-            "description": "Project created successfully",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "id": 1,
-                        "name": "PeopleUp",
-                        "description": (
-                            "Your 360 HRM solution - unified talent "
-                            "management with real-time insights"
-                        ),
-                        "created_at": "2026-07-26T10:00:00+00:00",
-                        "updated_at": "2026-07-26T10:00:00+00:00",
-                    }
-                }
-            },
-        },
-        422: {"description": "Validation error (empty name, too long, etc)"},
-    },
-)
+@router.post("", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
 def create_project(project: ProjectCreate, db: Annotated[Session, Depends(get_db)]):
     """Create a new project."""
     return ProjectService.create_project(db, project)
 
 
-@router.get(
-    "",
-    response_model=ProjectListResponse,
-    summary="List all projects",
-    responses={
-        200: {
-            "description": "Projects retrieved successfully",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "items": [
-                            {
-                                "id": 1,
-                                "name": "PeopleUp",
-                                "description": (
-                                    "Your 360 HRM solution - unified talent "
-                                    "management with real-time insights"
-                                ),
-                                "created_at": "2026-07-20T08:30:00+00:00",
-                                "updated_at": "2026-07-26T14:15:00+00:00",
-                            },
-                            {
-                                "id": 2,
-                                "name": "Actovio",
-                                "description": (
-                                    "Track productivity with intelligent activity "
-                                    "monitoring and engagement analytics"
-                                ),
-                                "created_at": "2026-07-22T11:45:00+00:00",
-                                "updated_at": "2026-07-26T10:20:00+00:00",
-                            },
-                        ],
-                        "total": 2,
-                        "page": 1,
-                        "page_size": 10,
-                    }
-                }
-            },
-        }
-    },
-)
+@router.get("", response_model=ProjectListResponse)
 def list_projects(
     db: Annotated[Session, Depends(get_db)],
     page: int = Query(default=1, ge=1),
@@ -109,32 +44,7 @@ def list_projects(
     )
 
 
-@router.get(
-    "/{project_id}",
-    response_model=ProjectResponse,
-    summary="Get a project by ID",
-    responses={
-        200: {
-            "description": "Project retrieved successfully",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "id": 1,
-                        "name": "PeopleUp",
-                        "description": (
-                            "Your 360 HRM solution - unified talent "
-                            "management with real-time insights"
-                        ),
-                        "created_at": "2026-07-20T08:30:00+00:00",
-                        "updated_at": "2026-07-26T14:15:00+00:00",
-                    }
-                }
-            },
-        },
-        404: {"description": "Project not found"},
-        422: {"description": "Invalid project ID"},
-    },
-)
+@router.get("/{project_id}", response_model=ProjectResponse)
 def get_project(db: Annotated[Session, Depends(get_db)], project_id: int = Path(gt=0)):
     """Retrieve a project by ID."""
     return ProjectService.get_project(db, project_id)

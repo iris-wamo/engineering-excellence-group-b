@@ -12,9 +12,7 @@ from app.services.task_service import TaskService
 def test_create_task_success(db_session: Session) -> None:
     project = ProjectService.create_project(db_session, ProjectCreate(name="Alpha"))
 
-    created = TaskService.create_task(
-        db_session, TaskCreate(title="Login", project_id=project.id)
-    )
+    created = TaskService.create_task(db_session, TaskCreate(title="Login", project_id=project.id))
 
     assert created.id is not None
     assert created.title == "Login"
@@ -40,9 +38,7 @@ def test_list_tasks_supports_pagination(db_session: Session) -> None:
 
 def test_update_task_status(db_session: Session) -> None:
     project = ProjectService.create_project(db_session, ProjectCreate(name="Alpha"))
-    created = TaskService.create_task(
-        db_session, TaskCreate(title="Login", project_id=project.id)
-    )
+    created = TaskService.create_task(db_session, TaskCreate(title="Login", project_id=project.id))
 
     updated = TaskService.update_task_status(
         db_session, created.id, TaskStatusUpdate(status=TaskStatus.done)

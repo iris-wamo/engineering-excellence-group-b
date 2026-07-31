@@ -2,9 +2,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.enums import TaskPriority, TaskStatus
-from app.models.project import Project
 from app.models.task import Task
-from app.models.user import User
 
 
 class TaskRepository:
@@ -18,14 +16,6 @@ class TaskRepository:
     @staticmethod
     def get_by_id(db: Session, task_id: int) -> Task | None:
         return db.get(Task, task_id)
-
-    @staticmethod
-    def get_project_by_id(db: Session, project_id: int) -> Project | None:
-        return db.get(Project, project_id)
-
-    @staticmethod
-    def get_user_by_id(db: Session, user_id: int) -> User | None:
-        return db.get(User, user_id)
 
     @staticmethod
     def update(db: Session, task: Task) -> Task:
@@ -44,7 +34,6 @@ class TaskRepository:
         project_id: int | None,
         assignee_id: int | None,
     ) -> tuple[list[Task], int]:
-
         filters = []
 
         if status is not None:
@@ -59,14 +48,7 @@ class TaskRepository:
         if assignee_id is not None:
             filters.append(Task.assignee_id == assignee_id)
 
-        total = (
-            db.scalar(
-                select(func.count())
-                .select_from(Task)
-                .where(*filters)
-            )
-            or 0
-        )
+        total = db.scalar(select(func.count()).select_from(Task).where(*filters)) or 0
 
         tasks = db.scalars(
             select(Task)

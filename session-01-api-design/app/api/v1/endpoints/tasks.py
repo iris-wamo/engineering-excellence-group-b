@@ -1,3 +1,5 @@
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
@@ -15,20 +17,25 @@ router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 
 @router.post("", response_model=TaskResponse, status_code=status.HTTP_201_CREATED)
-def create_task(payload: TaskCreate, db: Session = Depends(get_db)):
+def create_task(
+    payload: TaskCreate,
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Create a new task."""
     return TaskService.create_task(db, payload)
 
 
 @router.get("", response_model=TaskListResponse)
 def list_tasks(
-    page: int = Query(1, ge=1),
-    page_size: int = Query(10, ge=1, le=100),
+    db: Annotated[Session, Depends(get_db)],
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=100),
     status: TaskStatus | None = None,
     priority: TaskPriority | None = None,
     project_id: int | None = None,
     assignee_id: int | None = None,
-    db: Session = Depends(get_db),
 ):
+    """List tasks, paginated and optionally filtered."""
     return TaskService.list_tasks(
         db,
         page=page,
@@ -41,7 +48,8 @@ def list_tasks(
 
 
 @router.get("/{task_id}", response_model=TaskResponse)
-def get_task(task_id: int, db: Session = Depends(get_db)):
+def get_task(task_id: int, db: Annotated[Session, Depends(get_db)]):
+    """Retrieve a task by ID."""
     return TaskService.get_task(db, task_id)
 
 
@@ -49,6 +57,7 @@ def get_task(task_id: int, db: Session = Depends(get_db)):
 def update_task_status(
     task_id: int,
     payload: TaskStatusUpdate,
-    db: Session = Depends(get_db),
+    db: Annotated[Session, Depends(get_db)],
 ):
+    """Update the status of an existing task."""
     return TaskService.update_task_status(db, task_id, payload)

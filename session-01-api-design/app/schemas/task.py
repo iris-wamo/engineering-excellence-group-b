@@ -2,7 +2,7 @@
 
 from datetime import date, datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.enums import TaskPriority, TaskStatus
 
@@ -47,6 +47,14 @@ class TaskCreate(BaseModel):
         description="Task due date (YYYY-MM-DD).",
         examples=["2026-07-26"],
     )
+
+    @field_validator("title")
+    @classmethod
+    def validate_title(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Title cannot be empty or whitespace only.")
+        return cleaned
 
 
 class TaskStatusUpdate(BaseModel):

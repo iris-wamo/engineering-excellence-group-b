@@ -9,6 +9,17 @@ def test_task_create_rejects_blank_title() -> None:
         TaskCreate(title="", project_id=1)
 
 
+def test_task_create_rejects_blank_title_after_stripping() -> None:
+    with pytest.raises(ValidationError):
+        TaskCreate(title="   ", project_id=1)
+
+
+def test_task_create_strips_title_whitespace() -> None:
+    task = TaskCreate(title="  Login  ", project_id=1)
+
+    assert task.title == "Login"
+
+
 def test_task_create_rejects_title_longer_than_limit() -> None:
     with pytest.raises(ValidationError):
         TaskCreate(title="x" * 101, project_id=1)

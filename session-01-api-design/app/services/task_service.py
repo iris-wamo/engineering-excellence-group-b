@@ -7,7 +7,9 @@ from app.models.enums import TaskPriority, TaskStatus
 from app.models.project import Project
 from app.models.task import Task
 from app.models.user import User
+from app.repositories.project_repository import ProjectRepository
 from app.repositories.task_repository import TaskRepository
+from app.repositories.user_repository import UserRepository
 from app.schemas.task import (
     TaskCreate,
     TaskListResponse,
@@ -17,7 +19,7 @@ from app.schemas.task import (
 
 
 def _get_project_or_404(db: Session, project_id: int) -> Project:
-    project = TaskRepository.get_project_by_id(db, project_id)
+    project = ProjectRepository.get_by_id(db, project_id)
     if project is None:
         raise NotFoundError(
             "Project not found",
@@ -27,7 +29,7 @@ def _get_project_or_404(db: Session, project_id: int) -> Project:
 
 
 def _get_user_or_404(db: Session, user_id: int) -> User:
-    user = TaskRepository.get_user_by_id(db, user_id)
+    user = UserRepository.get_by_id(db, user_id)
     if user is None:
         raise NotFoundError(
             "Assignee not found",
@@ -54,7 +56,7 @@ class TaskService:
             _get_user_or_404(db, data.assignee_id)
 
         task = Task(
-            title=data.title.strip(),
+            title=data.title,
             description=data.description,
             project_id=data.project_id,
             assignee_id=data.assignee_id,

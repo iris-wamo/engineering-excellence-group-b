@@ -9,14 +9,14 @@ from app.schemas.task import (
     TaskResponse,
     TaskStatusUpdate,
 )
-from app.services import task_service
+from app.services.task_service import TaskService
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 
 @router.post("", response_model=TaskResponse, status_code=status.HTTP_201_CREATED)
 def create_task(payload: TaskCreate, db: Session = Depends(get_db)):
-    return task_service.create_task(db, payload)
+    return TaskService.create_task(db, payload)
 
 
 @router.get("", response_model=TaskListResponse)
@@ -29,7 +29,7 @@ def list_tasks(
     assignee_id: int | None = None,
     db: Session = Depends(get_db),
 ):
-    return task_service.list_tasks(
+    return TaskService.list_tasks(
         db,
         page=page,
         page_size=page_size,
@@ -42,7 +42,7 @@ def list_tasks(
 
 @router.get("/{task_id}", response_model=TaskResponse)
 def get_task(task_id: int, db: Session = Depends(get_db)):
-    return task_service.get_task(db, task_id)
+    return TaskService.get_task(db, task_id)
 
 
 @router.patch("/{task_id}/status", response_model=TaskResponse)
@@ -51,4 +51,4 @@ def update_task_status(
     payload: TaskStatusUpdate,
     db: Session = Depends(get_db),
 ):
-    return task_service.update_task_status(db, task_id, payload)
+    return TaskService.update_task_status(db, task_id, payload)

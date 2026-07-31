@@ -2,7 +2,7 @@
 
 from datetime import date, datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.enums import TaskPriority, TaskStatus
 
@@ -73,9 +73,9 @@ class TaskResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    model_config = {
-        "from_attributes": True,
-        "json_schema_extra": {
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_schema_extra={
             "examples": [
                 {
                     "id": 1,
@@ -91,7 +91,7 @@ class TaskResponse(BaseModel):
                 }
             ]
         },
-    }
+    )
 
 
 class TaskListResponse(BaseModel):

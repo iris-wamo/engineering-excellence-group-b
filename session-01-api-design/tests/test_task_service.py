@@ -45,3 +45,23 @@ def test_update_task_status(db_session: Session) -> None:
     )
 
     assert updated.status == TaskStatus.done
+
+
+def test_create_task_raises_404_for_missing_project(db_session: Session) -> None:
+    with pytest.raises(NotFoundError):
+        TaskService.create_task(db_session, TaskCreate(title="Login", project_id=999))
+
+
+def test_create_task_raises_404_for_missing_assignee(db_session: Session) -> None:
+    project = ProjectService.create_project(db_session, ProjectCreate(name="Alpha"))
+
+    with pytest.raises(NotFoundError):
+        TaskService.create_task(
+            db_session,
+            TaskCreate(title="Login", project_id=project.id, assignee_id=999),
+        )
+
+
+def test_update_task_status_raises_404_for_missing_task(db_session: Session) -> None:
+    with pytest.raises(NotFoundError):
+        TaskService.update_task_status(db_session, 999, TaskStatusUpdate(status=TaskStatus.done))

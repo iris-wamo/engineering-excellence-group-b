@@ -63,3 +63,35 @@ def test_update_task_status(client: TestClient) -> None:
 
     assert response.status_code == 200
     assert response.json()["status"] == "in_progress"
+
+
+def test_create_task_returns_404_for_missing_project(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/tasks",
+        json={"title": "Login", "project_id": 999900000},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "NOT_FOUND"
+
+
+def test_create_task_returns_404_for_missing_assignee(client: TestClient) -> None:
+    project_id = client.post("/api/v1/projects", json={"name": "Alpha"}).json()["id"]
+
+    response = client.post(
+        "/api/v1/tasks",
+        json={"title": "Login", "project_id": project_id, "assignee_id": 999900000},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "NOT_FOUND"
+
+
+def test_update_task_status_returns_404_for_missing_task(client: TestClient) -> None:
+    response = client.patch(
+        "/api/v1/tasks/999900000/status",
+        json={"status": "in_progress"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "NOT_FOUND"

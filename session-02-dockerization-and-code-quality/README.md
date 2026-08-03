@@ -1,4 +1,4 @@
-# TaskFlow — Session 01
+# TaskFlow — Session 02
 
 Internal team work management backend. This directory holds the FastAPI application, the
 SQLAlchemy database models, and the Alembic migrations.
@@ -150,7 +150,7 @@ psql "postgresql://taskflow:taskflow@localhost:5432/taskflow" -c "SELECT current
 
 ## Step 4 — Configure and run
 
-From the `session-01-api-design/` directory:
+From the `session-02-dockerization-and-code-quality/` directory:
 
 ```bash
 # 1. Install Python + all dependencies into a local .venv

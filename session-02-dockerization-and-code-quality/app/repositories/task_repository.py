@@ -1,5 +1,5 @@
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.enums import TaskPriority, TaskStatus
 from app.models.task import Task
@@ -7,25 +7,25 @@ from app.models.task import Task
 
 class TaskRepository:
     @staticmethod
-    def create(db: Session, task: Task) -> Task:
+    async def create(db: AsyncSession, task: Task) -> Task:
         db.add(task)
-        db.commit()
-        db.refresh(task)
+        await db.commit()
+        await db.refresh(task)
         return task
 
     @staticmethod
-    def get_by_id(db: Session, task_id: int) -> Task | None:
-        return db.get(Task, task_id)
+    async def get_by_id(db: AsyncSession, task_id: int) -> Task | None:
+        return await db.get(Task, task_id)
 
     @staticmethod
-    def update(db: Session, task: Task) -> Task:
-        db.commit()
-        db.refresh(task)
+    async def update(db: AsyncSession, task: Task) -> Task:
+        await db.commit()
+        await db.refresh(task)
         return task
 
     @staticmethod
-    def get_all(
-        db: Session,
+    async def get_all(
+        db: AsyncSession,
         *,
         page: int,
         page_size: int,
@@ -48,14 +48,16 @@ class TaskRepository:
         if assignee_id is not None:
             filters.append(Task.assignee_id == assignee_id)
 
-        total = db.scalar(select(func.count()).select_from(Task).where(*filters)) or 0
+        total = await db.scalar(select(func.count()).select_from(Task).where(*filters)) or 0
 
-        tasks = db.scalars(
-            select(Task)
-            .where(*filters)
-            .order_by(Task.id.desc())
-            .offset((page - 1) * page_size)
-            .limit(page_size)
+        tasks = (
+            await db.scalars(
+                select(Task)
+                .where(*filters)
+                .order_by(Task.id.desc())
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            )
         ).all()
 
         return list(tasks), total

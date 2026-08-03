@@ -1,6 +1,9 @@
+import asyncio
 from logging.config import fileConfig
 
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import pool
+from sqlalchemy.engine import Connection
+from sqlalchemy.ext.asyncio import async_engine_from_config
 
 # Importing the models package registers every table on Base.metadata,
 # which is what --autogenerate compares the database against.
@@ -35,24 +38,36 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
-def run_migrations_online() -> None:
-    """Connect to the database and run the migrations against it."""
-    connectable = engine_from_config(
+def run_migrations(connection: Connection) -> None:
+    """Run alembic's sync migrations on the provided connection"""
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        # Also notice column type changes, not just added/removed columns.
+        compare_type=True,
+    )
+
+    with context.begin_transaction():
+        context.run_migrations()
+
+
+async def run_async_migrations() -> None:
+    """Open an async DB connection, then hand it to alembic"""
+    connectable = async_engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
 
-    with connectable.connect() as connection:
-        context.configure(
-            connection=connection,
-            target_metadata=target_metadata,
-            # Also notice column type changes, not just added/removed columns.
-            compare_type=True,
-        )
+    async with connectable.connect() as connection:
+        await connection.run_sync(run_migrations)
 
-        with context.begin_transaction():
-            context.run_migrations()
+    await connectable.dispose()
+
+
+def run_migrations_online() -> None:
+    """Run migrations with an async database connection"""
+    asyncio.run(run_async_migrations())
 
 
 if context.is_offline_mode():

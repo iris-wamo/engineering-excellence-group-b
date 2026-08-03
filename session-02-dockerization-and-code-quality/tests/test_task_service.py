@@ -1,5 +1,5 @@
 import pytest
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import NotFoundError
 from app.models.enums import TaskStatus
@@ -9,59 +9,65 @@ from app.services.project_service import ProjectService
 from app.services.task_service import TaskService
 
 
-def test_create_task_success(db_session: Session) -> None:
-    project = ProjectService.create_project(db_session, ProjectCreate(name="Alpha"))
+async def test_create_task_success(db_session: AsyncSession) -> None:
+    project = await ProjectService.create_project(db_session, ProjectCreate(name="Alpha"))
 
-    created = TaskService.create_task(db_session, TaskCreate(title="Login", project_id=project.id))
+    created = await TaskService.create_task(
+        db_session, TaskCreate(title="Login", project_id=project.id)
+    )
 
     assert created.id is not None
     assert created.title == "Login"
     assert created.status == TaskStatus.todo
 
 
-def test_get_task_raises_404_for_missing_task(db_session: Session) -> None:
+async def test_get_task_raises_404_for_missing_task(db_session: AsyncSession) -> None:
     with pytest.raises(NotFoundError):
-        TaskService.get_task(db_session, 999)
+        await TaskService.get_task(db_session, 999)
 
 
-def test_list_tasks_supports_pagination(db_session: Session) -> None:
-    project = ProjectService.create_project(db_session, ProjectCreate(name="Alpha"))
-    TaskService.create_task(db_session, TaskCreate(title="A", project_id=project.id))
-    TaskService.create_task(db_session, TaskCreate(title="B", project_id=project.id))
-    TaskService.create_task(db_session, TaskCreate(title="C", project_id=project.id))
+async def test_list_tasks_supports_pagination(db_session: AsyncSession) -> None:
+    project = await ProjectService.create_project(db_session, ProjectCreate(name="Alpha"))
+    await TaskService.create_task(db_session, TaskCreate(title="A", project_id=project.id))
+    await TaskService.create_task(db_session, TaskCreate(title="B", project_id=project.id))
+    await TaskService.create_task(db_session, TaskCreate(title="C", project_id=project.id))
 
-    result = TaskService.list_tasks(db_session, page=1, page_size=2)
+    result = await TaskService.list_tasks(db_session, page=1, page_size=2)
 
     assert result.total == 3
     assert len(result.items) == 2
 
 
-def test_update_task_status(db_session: Session) -> None:
-    project = ProjectService.create_project(db_session, ProjectCreate(name="Alpha"))
-    created = TaskService.create_task(db_session, TaskCreate(title="Login", project_id=project.id))
+async def test_update_task_status(db_session: AsyncSession) -> None:
+    project = await ProjectService.create_project(db_session, ProjectCreate(name="Alpha"))
+    created = await TaskService.create_task(
+        db_session, TaskCreate(title="Login", project_id=project.id)
+    )
 
-    updated = TaskService.update_task_status(
+    updated = await TaskService.update_task_status(
         db_session, created.id, TaskStatusUpdate(status=TaskStatus.done)
     )
 
     assert updated.status == TaskStatus.done
 
 
-def test_create_task_raises_404_for_missing_project(db_session: Session) -> None:
+async def test_create_task_raises_404_for_missing_project(db_session: AsyncSession) -> None:
     with pytest.raises(NotFoundError):
-        TaskService.create_task(db_session, TaskCreate(title="Login", project_id=999))
+        await TaskService.create_task(db_session, TaskCreate(title="Login", project_id=999))
 
 
-def test_create_task_raises_404_for_missing_assignee(db_session: Session) -> None:
-    project = ProjectService.create_project(db_session, ProjectCreate(name="Alpha"))
+async def test_create_task_raises_404_for_missing_assignee(db_session: AsyncSession) -> None:
+    project = await ProjectService.create_project(db_session, ProjectCreate(name="Alpha"))
 
     with pytest.raises(NotFoundError):
-        TaskService.create_task(
+        await TaskService.create_task(
             db_session,
             TaskCreate(title="Login", project_id=project.id, assignee_id=999),
         )
 
 
-def test_update_task_status_raises_404_for_missing_task(db_session: Session) -> None:
+async def test_update_task_status_raises_404_for_missing_task(db_session: AsyncSession) -> None:
     with pytest.raises(NotFoundError):
-        TaskService.update_task_status(db_session, 999, TaskStatusUpdate(status=TaskStatus.done))
+        await TaskService.update_task_status(
+            db_session, 999, TaskStatusUpdate(status=TaskStatus.done)
+        )

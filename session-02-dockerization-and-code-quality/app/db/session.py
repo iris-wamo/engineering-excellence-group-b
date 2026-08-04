@@ -4,11 +4,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.core.config import settings
 
-# str() because database_url is a pydantic PostgresDsn; create_engine wants a plain string.
-engine = create_async_engine(str(settings.database_url))
-AsyncSessionLocal = async_sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+_sessionmaker: async_sessionmaker[AsyncSession] | None = None
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    async with AsyncSessionLocal() as db:
+    global _sessionmaker
+    if _sessionmaker is None:
+        engine = create_async_engine(str(settings.database_url))
+        _sessionmaker = async_sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+
+    async with _sessionmaker() as db:
         yield db

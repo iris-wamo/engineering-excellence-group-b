@@ -8,10 +8,14 @@ from app.models.task import Task
 class TaskRepository:
     @staticmethod
     async def create(db: AsyncSession, task: Task) -> Task:
-        db.add(task)
-        await db.commit()
-        await db.refresh(task)
-        return task
+        try:
+            db.add(task)
+            await db.commit()
+            await db.refresh(task)
+            return task
+        except Exception:
+            await db.rollback()
+            raise
 
     @staticmethod
     async def get_by_id(db: AsyncSession, task_id: int) -> Task | None:
@@ -19,9 +23,13 @@ class TaskRepository:
 
     @staticmethod
     async def update(db: AsyncSession, task: Task) -> Task:
-        await db.commit()
-        await db.refresh(task)
-        return task
+        try:
+            await db.commit()
+            await db.refresh(task)
+            return task
+        except Exception:
+            await db.rollback()
+            raise
 
     @staticmethod
     async def get_all(

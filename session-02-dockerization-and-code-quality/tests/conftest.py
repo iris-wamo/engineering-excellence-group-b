@@ -11,30 +11,44 @@ from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
 
+_base_url, _, _db_name = str(settings.database_url).rpartition("/")
+TEST_DATABASE_URL = f"{_base_url}/{_db_name}_test"
 
-@pytest.fixture()
-async def db_session() -> AsyncSession:
-    """Fixture that provides a clean database session for each test"""
-    base_url, _, db_name = str(settings.database_url).rpartition("/")
-    test_db_url = f"{base_url}/{db_name}_test"
 
-    # Create a dedicated engine and sessionmaker for this test
-    engine = create_async_engine(test_db_url)
-    TestingSessionLocal = async_sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
-
-    # Setup: Drop and recreate all tables for a clean slate
+@pytest.fixture(scope="session", autouse=True)
+async def setup_database() -> None:
+    """Creates the database schema once at the start of tests and drops it at the end"""
+    engine = create_async_engine(TEST_DATABASE_URL)
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.drop_all)
         await connection.run_sync(Base.metadata.create_all)
+    yield
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.drop_all)
+    await engine.dispose()
 
-    try:
-        async with TestingSessionLocal() as session:
-            yield session
-    finally:
-        # Teardown: Clean up tables and close the connection pool
-        async with engine.begin() as connection:
-            await connection.run_sync(Base.metadata.drop_all)
-        await engine.dispose()
+
+@pytest.fixture()
+async def db_session() -> AsyncSession:
+    """Provides a transactional database session that rolls back changes after each test"""
+    engine = create_async_engine(TEST_DATABASE_URL)
+    connection = await engine.connect()
+    transaction = await connection.begin()
+
+    # join_transaction_mode="create_savepoint" captures commits inside code (rolling them back)
+    testing_session_local = async_sessionmaker(
+        bind=connection,
+        autoflush=False,
+        expire_on_commit=False,
+        join_transaction_mode="create_savepoint",
+    )
+
+    async with testing_session_local() as session:
+        yield session
+
+    await transaction.rollback()
+    await connection.close()
+    await engine.dispose()
 
 
 @pytest.fixture()

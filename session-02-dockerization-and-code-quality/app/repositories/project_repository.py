@@ -8,10 +8,14 @@ class ProjectRepository:
     @staticmethod
     async def create(db: AsyncSession, *, name: str, description: str | None) -> Project:
         project = Project(name=name, description=description)
-        db.add(project)
-        await db.commit()
-        await db.refresh(project)
-        return project
+        try:
+            db.add(project)
+            await db.commit()
+            await db.refresh(project)
+            return project
+        except Exception:
+            await db.rollback()
+            raise
 
     @staticmethod
     async def get_by_id(db: AsyncSession, project_id: int) -> Project | None:

@@ -1,4 +1,4 @@
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import NotFoundError
 from app.models.project import Project
@@ -8,12 +8,14 @@ from app.schemas.project import ProjectCreate
 
 class ProjectService:
     @staticmethod
-    def create_project(db: Session, payload: ProjectCreate) -> Project:
-        return ProjectRepository.create(db, name=payload.name, description=payload.description)
+    async def create_project(db: AsyncSession, payload: ProjectCreate) -> Project:
+        return await ProjectRepository.create(
+            db, name=payload.name, description=payload.description
+        )
 
     @staticmethod
-    def get_project(db: Session, project_id: int) -> Project:
-        project = ProjectRepository.get_by_id(db, project_id)
+    async def get_project(db: AsyncSession, project_id: int) -> Project:
+        project = await ProjectRepository.get_by_id(db, project_id)
         if project is None:
             raise NotFoundError(
                 "Project not found",
@@ -23,8 +25,8 @@ class ProjectService:
         return project
 
     @staticmethod
-    def list_projects(
-        db: Session,
+    async def list_projects(
+        db: AsyncSession,
         *,
         page: int,
         page_size: int,
@@ -33,7 +35,7 @@ class ProjectService:
         sort_order: str,
     ) -> tuple[list[Project], int]:
         offset = (page - 1) * page_size
-        return ProjectRepository.get_all(
+        return await ProjectRepository.get_all(
             db,
             limit=page_size,
             offset=offset,

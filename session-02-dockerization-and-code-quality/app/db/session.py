@@ -1,18 +1,17 @@
-from collections.abc import Generator
+from collections.abc import AsyncGenerator
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import settings
 
-# str() because database_url is a pydantic PostgresDsn; create_engine wants a plain string.
-engine = create_engine(str(settings.database_url))
-SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+_sessionmaker: async_sessionmaker[AsyncSession] | None = None
 
 
-def get_db() -> Generator[Session, None, None]:
-    db = SessionLocal()
-    try:
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    global _sessionmaker
+    if _sessionmaker is None:
+        engine = create_async_engine(str(settings.database_url))
+        _sessionmaker = async_sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+
+    async with _sessionmaker() as db:
         yield db
-    finally:
-        db.close()

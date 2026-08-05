@@ -1,10 +1,10 @@
-from fastapi.testclient import TestClient
+from httpx import AsyncClient
 
 
-def test_create_task_returns_201_and_payload(client: TestClient) -> None:
-    project_id = client.post("/api/v1/projects", json={"name": "Alpha"}).json()["id"]
+async def test_create_task_returns_201_and_payload(client: AsyncClient) -> None:
+    project_id = (await client.post("/api/v1/projects", json={"name": "Alpha"})).json()["id"]
 
-    response = client.post(
+    response = await client.post(
         "/api/v1/tasks",
         json={"title": "Login", "project_id": project_id},
     )
@@ -16,10 +16,10 @@ def test_create_task_returns_201_and_payload(client: TestClient) -> None:
     assert body["status"] == "todo"
 
 
-def test_create_task_rejects_blank_title(client: TestClient) -> None:
-    project_id = client.post("/api/v1/projects", json={"name": "Alpha"}).json()["id"]
+async def test_create_task_rejects_blank_title(client: AsyncClient) -> None:
+    project_id = (await client.post("/api/v1/projects", json={"name": "Alpha"})).json()["id"]
 
-    response = client.post(
+    response = await client.post(
         "/api/v1/tasks",
         json={"title": "", "project_id": project_id},
     )
@@ -27,19 +27,19 @@ def test_create_task_rejects_blank_title(client: TestClient) -> None:
     assert response.status_code == 422
 
 
-def test_get_task_returns_404_for_missing_task(client: TestClient) -> None:
-    response = client.get("/api/v1/tasks/999900000")
+async def test_get_task_returns_404_for_missing_task(client: AsyncClient) -> None:
+    response = await client.get("/api/v1/tasks/999900000")
 
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "NOT_FOUND"
 
 
-def test_list_tasks_returns_paginated_envelope(client: TestClient) -> None:
-    project_id = client.post("/api/v1/projects", json={"name": "Alpha"}).json()["id"]
-    client.post("/api/v1/tasks", json={"title": "A", "project_id": project_id})
-    client.post("/api/v1/tasks", json={"title": "B", "project_id": project_id})
+async def test_list_tasks_returns_paginated_envelope(client: AsyncClient) -> None:
+    project_id = (await client.post("/api/v1/projects", json={"name": "Alpha"})).json()["id"]
+    await client.post("/api/v1/tasks", json={"title": "A", "project_id": project_id})
+    await client.post("/api/v1/tasks", json={"title": "B", "project_id": project_id})
 
-    response = client.get("/api/v1/tasks?page=1&page_size=1")
+    response = await client.get("/api/v1/tasks?page=1&page_size=1")
 
     assert response.status_code == 200
     body = response.json()
@@ -49,14 +49,16 @@ def test_list_tasks_returns_paginated_envelope(client: TestClient) -> None:
     assert len(body["items"]) == 1
 
 
-def test_update_task_status(client: TestClient) -> None:
-    project_id = client.post("/api/v1/projects", json={"name": "Alpha"}).json()["id"]
-    task_id = client.post(
-        "/api/v1/tasks",
-        json={"title": "Login", "project_id": project_id},
+async def test_update_task_status(client: AsyncClient) -> None:
+    project_id = (await client.post("/api/v1/projects", json={"name": "Alpha"})).json()["id"]
+    task_id = (
+        await client.post(
+            "/api/v1/tasks",
+            json={"title": "Login", "project_id": project_id},
+        )
     ).json()["id"]
 
-    response = client.patch(
+    response = await client.patch(
         f"/api/v1/tasks/{task_id}/status",
         json={"status": "in_progress"},
     )
@@ -65,8 +67,8 @@ def test_update_task_status(client: TestClient) -> None:
     assert response.json()["status"] == "in_progress"
 
 
-def test_create_task_returns_404_for_missing_project(client: TestClient) -> None:
-    response = client.post(
+async def test_create_task_returns_404_for_missing_project(client: AsyncClient) -> None:
+    response = await client.post(
         "/api/v1/tasks",
         json={"title": "Login", "project_id": 999900000},
     )
@@ -75,10 +77,10 @@ def test_create_task_returns_404_for_missing_project(client: TestClient) -> None
     assert response.json()["error"]["code"] == "NOT_FOUND"
 
 
-def test_create_task_returns_404_for_missing_assignee(client: TestClient) -> None:
-    project_id = client.post("/api/v1/projects", json={"name": "Alpha"}).json()["id"]
+async def test_create_task_returns_404_for_missing_assignee(client: AsyncClient) -> None:
+    project_id = (await client.post("/api/v1/projects", json={"name": "Alpha"})).json()["id"]
 
-    response = client.post(
+    response = await client.post(
         "/api/v1/tasks",
         json={"title": "Login", "project_id": project_id, "assignee_id": 999900000},
     )
@@ -87,8 +89,8 @@ def test_create_task_returns_404_for_missing_assignee(client: TestClient) -> Non
     assert response.json()["error"]["code"] == "NOT_FOUND"
 
 
-def test_update_task_status_returns_404_for_missing_task(client: TestClient) -> None:
-    response = client.patch(
+async def test_update_task_status_returns_404_for_missing_task(client: AsyncClient) -> None:
+    response = await client.patch(
         "/api/v1/tasks/999900000/status",
         json={"status": "in_progress"},
     )

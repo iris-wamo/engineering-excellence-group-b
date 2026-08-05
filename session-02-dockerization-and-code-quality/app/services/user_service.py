@@ -1,4 +1,4 @@
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import UserNotFoundError
 from app.models.user import User
@@ -8,17 +8,17 @@ from app.schemas.user import UserCreate
 
 class UserService:
     @staticmethod
-    def create_user(db: Session, payload: UserCreate) -> User:
-        return UserRepository.create(db, name=payload.name, email=str(payload.email))
+    async def create_user(db: AsyncSession, payload: UserCreate) -> User:
+        return await UserRepository.create(db, name=payload.name, email=str(payload.email))
 
     @staticmethod
-    def get_users(db: Session, *, page: int, page_size: int) -> tuple[list[User], int]:
+    async def get_users(db: AsyncSession, *, page: int, page_size: int) -> tuple[list[User], int]:
         offset = (page - 1) * page_size
-        return UserRepository.get_all(db, limit=page_size, offset=offset)
+        return await UserRepository.get_all(db, limit=page_size, offset=offset)
 
     @staticmethod
-    def get_user(db: Session, user_id: int) -> User:
-        user = UserRepository.get_by_id(db, user_id)
+    async def get_user(db: AsyncSession, user_id: int) -> User:
+        user = await UserRepository.get_by_id(db, user_id)
         if user is None:
             raise UserNotFoundError()
 

@@ -1,25 +1,29 @@
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.project import Project
 
 
 class ProjectRepository:
     @staticmethod
-    def create(db: Session, *, name: str, description: str | None) -> Project:
+    async def create(db: AsyncSession, *, name: str, description: str | None) -> Project:
         project = Project(name=name, description=description)
-        db.add(project)
-        db.commit()
-        db.refresh(project)
-        return project
+        try:
+            db.add(project)
+            await db.commit()
+            await db.refresh(project)
+            return project
+        except Exception:
+            await db.rollback()
+            raise
 
     @staticmethod
-    def get_by_id(db: Session, project_id: int) -> Project | None:
-        return db.get(Project, project_id)
+    async def get_by_id(db: AsyncSession, project_id: int) -> Project | None:
+        return await db.get(Project, project_id)
 
     @staticmethod
-    def get_all(
-        db: Session,
+    async def get_all(
+        db: AsyncSession,
         *,
         limit: int,
         offset: int,
@@ -29,13 +33,15 @@ class ProjectRepository:
     ) -> tuple[list[Project], int]:
         filters = [Project.name.ilike(f"%{search}%")] if search else []
 
-        total = db.scalar(select(func.count()).select_from(Project).where(*filters)) or 0
+        total = await db.scalar(select(func.count()).select_from(Project).where(*filters)) or 0
 
         sort_column = getattr(Project, sort_by)
         sort_column = sort_column.asc() if sort_order == "asc" else sort_column.desc()
 
-        projects = db.scalars(
-            select(Project).where(*filters).order_by(sort_column).offset(offset).limit(limit)
+        projects = (
+            await db.scalars(
+                select(Project).where(*filters).order_by(sort_column).offset(offset).limit(limit)
+            )
         ).all()
 
         return list(projects), total

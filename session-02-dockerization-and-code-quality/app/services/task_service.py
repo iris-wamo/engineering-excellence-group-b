@@ -1,6 +1,6 @@
 """Business logic for task management."""
 
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import NotFoundError
 from app.models.enums import TaskPriority, TaskStatus
@@ -18,8 +18,8 @@ from app.schemas.task import (
 )
 
 
-def _get_project_or_404(db: Session, project_id: int) -> Project:
-    project = ProjectRepository.get_by_id(db, project_id)
+async def _get_project_or_404(db: AsyncSession, project_id: int) -> Project:
+    project = await ProjectRepository.get_by_id(db, project_id)
     if project is None:
         raise NotFoundError(
             "Project not found",
@@ -28,8 +28,8 @@ def _get_project_or_404(db: Session, project_id: int) -> Project:
     return project
 
 
-def _get_user_or_404(db: Session, user_id: int) -> User:
-    user = UserRepository.get_by_id(db, user_id)
+async def _get_user_or_404(db: AsyncSession, user_id: int) -> User:
+    user = await UserRepository.get_by_id(db, user_id)
     if user is None:
         raise NotFoundError(
             "Assignee not found",
@@ -38,8 +38,8 @@ def _get_user_or_404(db: Session, user_id: int) -> User:
     return user
 
 
-def _get_task_or_404(db: Session, task_id: int) -> Task:
-    task = TaskRepository.get_by_id(db, task_id)
+async def _get_task_or_404(db: AsyncSession, task_id: int) -> Task:
+    task = await TaskRepository.get_by_id(db, task_id)
     if task is None:
         raise NotFoundError(
             "Task not found",
@@ -50,10 +50,10 @@ def _get_task_or_404(db: Session, task_id: int) -> Task:
 
 class TaskService:
     @staticmethod
-    def create_task(db: Session, data: TaskCreate) -> TaskResponse:
-        _get_project_or_404(db, data.project_id)
+    async def create_task(db: AsyncSession, data: TaskCreate) -> TaskResponse:
+        await _get_project_or_404(db, data.project_id)
         if data.assignee_id is not None:
-            _get_user_or_404(db, data.assignee_id)
+            await _get_user_or_404(db, data.assignee_id)
 
         task = Task(
             title=data.title,
@@ -64,12 +64,12 @@ class TaskService:
             due_date=data.due_date,
             status=TaskStatus.todo,
         )
-        task = TaskRepository.create(db, task)
+        task = await TaskRepository.create(db, task)
         return TaskResponse.model_validate(task)
 
     @staticmethod
-    def list_tasks(
-        db: Session,
+    async def list_tasks(
+        db: AsyncSession,
         page: int,
         page_size: int,
         status: TaskStatus | None = None,
@@ -77,7 +77,7 @@ class TaskService:
         project_id: int | None = None,
         assignee_id: int | None = None,
     ) -> TaskListResponse:
-        tasks, total = TaskRepository.get_all(
+        tasks, total = await TaskRepository.get_all(
             db,
             page=page,
             page_size=page_size,
@@ -94,17 +94,17 @@ class TaskService:
         )
 
     @staticmethod
-    def get_task(db: Session, task_id: int) -> TaskResponse:
-        task = _get_task_or_404(db, task_id)
+    async def get_task(db: AsyncSession, task_id: int) -> TaskResponse:
+        task = await _get_task_or_404(db, task_id)
         return TaskResponse.model_validate(task)
 
     @staticmethod
-    def update_task_status(
-        db: Session,
+    async def update_task_status(
+        db: AsyncSession,
         task_id: int,
         data: TaskStatusUpdate,
     ) -> TaskResponse:
-        task = _get_task_or_404(db, task_id)
+        task = await _get_task_or_404(db, task_id)
         task.status = data.status
-        task = TaskRepository.update(db, task)
+        task = await TaskRepository.update(db, task)
         return TaskResponse.model_validate(task)

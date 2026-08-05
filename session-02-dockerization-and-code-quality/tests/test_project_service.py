@@ -1,40 +1,40 @@
 import pytest
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import NotFoundError
 from app.schemas.project import ProjectCreate
 from app.services.project_service import ProjectService
 
 
-def test_create_project_persists_name_and_description(db_session: Session) -> None:
+async def test_create_project_persists_name_and_description(db_session: AsyncSession) -> None:
     payload = ProjectCreate(name="Alpha", description="First project")
 
-    created = ProjectService.create_project(db_session, payload)
+    created = await ProjectService.create_project(db_session, payload)
 
     assert created.id is not None
     assert created.name == "Alpha"
     assert created.description == "First project"
 
 
-def test_get_project_returns_project_by_id(db_session: Session) -> None:
-    created = ProjectService.create_project(db_session, ProjectCreate(name="Alpha"))
+async def test_get_project_returns_project_by_id(db_session: AsyncSession) -> None:
+    created = await ProjectService.create_project(db_session, ProjectCreate(name="Alpha"))
 
-    found = ProjectService.get_project(db_session, created.id)
+    found = await ProjectService.get_project(db_session, created.id)
 
     assert found.id == created.id
 
 
-def test_get_project_raises_not_found_for_missing_project(db_session: Session) -> None:
+async def test_get_project_raises_not_found_for_missing_project(db_session: AsyncSession) -> None:
     with pytest.raises(NotFoundError):
-        ProjectService.get_project(db_session, 999)
+        await ProjectService.get_project(db_session, 999)
 
 
-def test_list_projects_supports_pagination(db_session: Session) -> None:
-    ProjectService.create_project(db_session, ProjectCreate(name="Alpha"))
-    ProjectService.create_project(db_session, ProjectCreate(name="Beta"))
-    ProjectService.create_project(db_session, ProjectCreate(name="Gamma"))
+async def test_list_projects_supports_pagination(db_session: AsyncSession) -> None:
+    await ProjectService.create_project(db_session, ProjectCreate(name="Alpha"))
+    await ProjectService.create_project(db_session, ProjectCreate(name="Beta"))
+    await ProjectService.create_project(db_session, ProjectCreate(name="Gamma"))
 
-    projects, total = ProjectService.list_projects(
+    projects, total = await ProjectService.list_projects(
         db_session, page=1, page_size=2, search=None, sort_by="name", sort_order="asc"
     )
 
@@ -42,11 +42,11 @@ def test_list_projects_supports_pagination(db_session: Session) -> None:
     assert [p.name for p in projects] == ["Alpha", "Beta"]
 
 
-def test_list_projects_filters_by_search(db_session: Session) -> None:
-    ProjectService.create_project(db_session, ProjectCreate(name="Marketing Site"))
-    ProjectService.create_project(db_session, ProjectCreate(name="Internal Tool"))
+async def test_list_projects_filters_by_search(db_session: AsyncSession) -> None:
+    await ProjectService.create_project(db_session, ProjectCreate(name="Marketing Site"))
+    await ProjectService.create_project(db_session, ProjectCreate(name="Internal Tool"))
 
-    projects, total = ProjectService.list_projects(
+    projects, total = await ProjectService.list_projects(
         db_session, page=1, page_size=10, search="marketing", sort_by="name", sort_order="asc"
     )
 
@@ -54,11 +54,11 @@ def test_list_projects_filters_by_search(db_session: Session) -> None:
     assert projects[0].name == "Marketing Site"
 
 
-def test_list_projects_sorts_descending(db_session: Session) -> None:
-    ProjectService.create_project(db_session, ProjectCreate(name="Alpha"))
-    ProjectService.create_project(db_session, ProjectCreate(name="Beta"))
+async def test_list_projects_sorts_descending(db_session: AsyncSession) -> None:
+    await ProjectService.create_project(db_session, ProjectCreate(name="Alpha"))
+    await ProjectService.create_project(db_session, ProjectCreate(name="Beta"))
 
-    projects, _total = ProjectService.list_projects(
+    projects, _total = await ProjectService.list_projects(
         db_session, page=1, page_size=10, search=None, sort_by="name", sort_order="desc"
     )
 

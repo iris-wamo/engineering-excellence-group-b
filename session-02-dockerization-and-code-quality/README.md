@@ -19,6 +19,7 @@ The database design this is built from is documented in
   - [Windows](#windows)
 - [Step 3 — Create the database and user](#step-3--create-the-database-and-user)
 - [Step 4 — Configure and run](#step-4--configure-and-run)
+- [Makefile Targets](#makefile-targets)
 - [Running tests](#running-tests)
 - [Project layout](#project-layout)
 - [Working with migrations](#working-with-migrations)
@@ -154,17 +155,17 @@ From the `session-02-dockerization-and-code-quality/` directory:
 
 ```bash
 # 1. Install Python + all dependencies into a local .venv
-uv sync
+uv sync                       # or use make install
 
 # 2. Create your local env file from the template
 cp .env.example .env          # macOS / Linux
 copy .env.example .env        # Windows (cmd)
 
 # 3. Create the tables by running every migration
-uv run alembic upgrade head
+uv run alembic upgrade head   # or use make migrate
 
 # 4. Start the API (auto-reloads on code changes)
-uv run uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload  # or use make run
 ```
 
 The defaults in `.env.example` already match the role and database from Step 3, so you
@@ -174,10 +175,37 @@ different port, user, or password.
 
 ---
 
+## Makefile Targets
+
+We provide a self-documenting `Makefile` to standardize common commands instead of remembering raw `uv run ...` or `uv ...` invocations.
+
+To list all available commands in alphabetical order, run:
+```bash
+make help  # or simply `make`
+```
+
+### Available Targets:
+- `make install` - Installs Python version, all dependencies via `uv sync`, and copies `.env.example` to `.env` if not present.
+- `make run` - Starts the FastAPI development server with reload.
+- `make lint` - Runs Ruff to lint and format-check the code.
+- `make lint-fix` - Auto-fixes lint issues and formats code.
+- `make format` - Formats the codebase using Ruff.
+- `make test` - Runs all unit tests.
+- `make test-cov` - Runs unit tests with code coverage report.
+- `make migrate` - Runs database migrations (upgrades to head).
+- `make migrate-create m="message"` - Generates a new database migration revision.
+- `make migrate-check` - Verifies database migrations match the current models.
+- `make migrate-current` - Shows current database migration revision.
+- `make migrate-history` - Lists all database migration history.
+- `make db-shell` - Opens an interactive `psql` database shell.
+
+
+---
+
 ## Running tests
 
 ```bash
-uv run pytest
+uv run pytest                 # or use make test
 ```
 
 Tests run against the real `taskflow_test` database created in Step 3 (the test DB name is
@@ -221,13 +249,13 @@ so every machine ends up with an identical schema.
 
 ```bash
 # Apply all outstanding migrations (creates/updates tables)
-uv run alembic upgrade head
+uv run alembic upgrade head   # or use make migrate
 
 # Which migration is the database currently on?
-uv run alembic current
+uv run alembic current        # or use make migrate-current
 
 # See the full history
-uv run alembic history
+uv run alembic history        # or use make migrate-history
 
 # Undo the most recent migration
 uv run alembic downgrade -1
@@ -240,17 +268,17 @@ uv run alembic downgrade base
 
 ```bash
 # 1. Generate a migration by diffing the models against the live database
-uv run alembic revision --autogenerate -m "short description of the change"
+uv run alembic revision --autogenerate -m "short description of the change"  # or use make migrate-create m="message"
 
 # 2. OPEN the generated file in alembic/versions/ and read it before applying.
 #    Autogenerate is a starting point, not the final answer — it can miss enum
 #    drops, server defaults, and data migrations. Adjust it by hand as needed.
 
 # 3. Apply it
-uv run alembic upgrade head
+uv run alembic upgrade head   # or use make migrate
 
 # 4. Confirm the models and database now agree (should report no changes)
-uv run alembic check
+uv run alembic check          # or use make migrate-check
 ```
 
 > **Every new model file must be imported in `app/models/__init__.py`.** Alembic only knows
@@ -263,7 +291,7 @@ uv run alembic check
 
 ```bash
 # Open an interactive psql shell (\q to quit)
-psql "postgresql://taskflow:taskflow@localhost:5432/taskflow"
+psql "postgresql://taskflow:taskflow@localhost:5432/taskflow"  # or use make db-shell
 ```
 
 Useful commands once inside psql:

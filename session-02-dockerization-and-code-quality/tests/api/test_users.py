@@ -74,9 +74,7 @@ async def test_get_user_returns_404_for_missing_user(client: AsyncClient) -> Non
     assert body["error"]["message"] == "User not found"
 
 
-async def test_get_users_supports_pagination(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
+async def test_get_users_supports_pagination(client: AsyncClient, db_session: AsyncSession) -> None:
     await UserService.create_user(db_session, UserCreate(name="User 1", email="user1@example.com"))
     await UserService.create_user(db_session, UserCreate(name="User 2", email="user2@example.com"))
     await UserService.create_user(db_session, UserCreate(name="User 3", email="user3@example.com"))

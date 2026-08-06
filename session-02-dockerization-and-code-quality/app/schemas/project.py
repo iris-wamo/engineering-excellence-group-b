@@ -12,7 +12,6 @@ class ProjectCreate(BaseModel):
         ...,
         min_length=1,
         max_length=150,
-        strip_whitespace=True,
         description="Project name (required, 1-150 characters)",
         examples=["PeopleUp", "Actovio"],
     )

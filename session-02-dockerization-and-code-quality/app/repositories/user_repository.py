@@ -23,9 +23,7 @@ class UserRepository:
     async def get_all(db: AsyncSession, *, limit: int, offset: int) -> tuple[list[User], int]:
         total = await db.scalar(select(func.count()).select_from(User)) or 0
 
-        users = (
-            await db.scalars(select(User).order_by(User.id).offset(offset).limit(limit))
-        ).all()
+        users = (await db.scalars(select(User).order_by(User.id).offset(offset).limit(limit))).all()
 
         return list(users), total
 

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
-from fastapi import FastAPI, status
+from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -38,7 +39,7 @@ class AppError(Exception):
     code: str = "APP_ERROR"
     status_code: int = status.HTTP_400_BAD_REQUEST
 
-    def __init__(self, message: str, details: list[dict] | None = None) -> None:
+    def __init__(self, message: str, details: list[dict[str, Any]] | None = None) -> None:
         self.message = message
         self.details = details or []
         super().__init__(message)
@@ -79,7 +80,9 @@ class UserNotFoundError(NotFoundError):
         )
 
 
-def error_json(status_code: int, code: str, message: str, details: list[dict] | None = None):
+def error_json(
+    status_code: int, code: str, message: str, details: list[dict[str, Any]] | None = None
+) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
         content={
@@ -92,16 +95,20 @@ def error_json(status_code: int, code: str, message: str, details: list[dict] | 
     )
 
 
-async def handle_app_error(request, exc: AppError):
+async def handle_app_error(request: Request, exc: Exception) -> JSONResponse:
+    if not isinstance(exc, AppError):
+        raise exc
     return error_json(exc.status_code, exc.code, exc.message, exc.details)
 
 
-async def handle_validation(request, exc: RequestValidationError):
+async def handle_validation(request: Request, exc: Exception) -> JSONResponse:
+    if not isinstance(exc, RequestValidationError):
+        raise exc
     details = [{"field": str(e["loc"][-1]), "message": e["msg"]} for e in exc.errors()]
     return error_json(422, "VALIDATION_ERROR", "Invalid request payload", details)
 
 
-async def handle_unexpected(request, exc: Exception):
+async def handle_unexpected(request: Request, exc: Exception) -> JSONResponse:
     logger.exception("Unexpected error")
     return error_json(500, "INTERNAL_SERVER_ERROR", "An unexpected error occurred")
 

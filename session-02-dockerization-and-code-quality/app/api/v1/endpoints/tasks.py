@@ -20,7 +20,7 @@ router = APIRouter(prefix="/tasks", tags=["tasks"])
 async def create_task(
     payload: TaskCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
-):
+) -> TaskResponse:
     """Create a new task."""
     return await TaskService.create_task(db, payload)
 
@@ -34,7 +34,7 @@ async def list_tasks(
     priority: TaskPriority | None = None,
     project_id: int | None = None,
     assignee_id: int | None = None,
-):
+) -> TaskListResponse:
     """List tasks, paginated and optionally filtered."""
     return await TaskService.list_tasks(
         db,
@@ -48,7 +48,7 @@ async def list_tasks(
 
 
 @router.get("/{task_id}", response_model=TaskResponse)
-async def get_task(task_id: int, db: Annotated[AsyncSession, Depends(get_db)]):
+async def get_task(task_id: int, db: Annotated[AsyncSession, Depends(get_db)]) -> TaskResponse:
     """Retrieve a task by ID."""
     return await TaskService.get_task(db, task_id)
 
@@ -58,6 +58,6 @@ async def update_task_status(
     task_id: int,
     payload: TaskStatusUpdate,
     db: Annotated[AsyncSession, Depends(get_db)],
-):
+) -> TaskResponse:
     """Update the status of an existing task."""
     return await TaskService.update_task_status(db, task_id, payload)

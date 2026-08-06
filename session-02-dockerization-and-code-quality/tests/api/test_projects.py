@@ -2,9 +2,7 @@ from httpx import AsyncClient
 
 
 async def test_create_project_returns_201_and_payload(client: AsyncClient) -> None:
-    response = await client.post(
-        "/api/v1/projects", json={"name": "Alpha", "description": "First"}
-    )
+    response = await client.post("/api/v1/projects", json={"name": "Alpha", "description": "First"})
 
     assert response.status_code == 201
     body = response.json()

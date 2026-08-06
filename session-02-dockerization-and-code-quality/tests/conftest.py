@@ -1,3 +1,5 @@
+from collections.abc import AsyncGenerator
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import (
@@ -16,7 +18,7 @@ TEST_DATABASE_URL = f"{_base_url}/{_db_name}_test"
 
 
 @pytest.fixture(scope="session", autouse=True)
-async def setup_database() -> None:
+async def setup_database() -> AsyncGenerator[None, None]:
     """Creates the database schema once at the start of tests and drops it at the end"""
     engine = create_async_engine(TEST_DATABASE_URL)
     async with engine.begin() as connection:
@@ -29,7 +31,7 @@ async def setup_database() -> None:
 
 
 @pytest.fixture()
-async def db_session() -> AsyncSession:
+async def db_session() -> AsyncGenerator[AsyncSession, None]:
     """Provides a transactional database session that rolls back changes after each test"""
     engine = create_async_engine(TEST_DATABASE_URL)
     connection = await engine.connect()
@@ -52,9 +54,10 @@ async def db_session() -> AsyncSession:
 
 
 @pytest.fixture()
-async def client(db_session: AsyncSession) -> AsyncClient:
+async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
     """Fixture that provides an AsyncClient with overridden database dependency"""
-    async def override_get_db():
+
+    async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
         yield db_session
 
     app.dependency_overrides[get_db] = override_get_db
@@ -62,4 +65,3 @@ async def client(db_session: AsyncSession) -> AsyncClient:
     async with AsyncClient(transport=transport, base_url="http://test") as test_client:
         yield test_client
     app.dependency_overrides.clear()
-

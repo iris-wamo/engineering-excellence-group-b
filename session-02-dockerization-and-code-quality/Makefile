@@ -35,6 +35,14 @@ lint-fix: ## Auto-fix lint issues and format code
 	uv run ruff check --fix .
 	uv run ruff format .
 
+.PHONY: hooks
+hooks: ## Install the pre-commit git hooks
+	uv run pre-commit install --config .pre-commit-config.yaml
+
+.PHONY: hooks-run
+hooks-run: ## Run all pre-commit hooks against all files
+	uv run pre-commit run --all-files
+
 .PHONY: migrate
 migrate: ## Run database migrations to upgrade to head
 	uv run alembic upgrade head

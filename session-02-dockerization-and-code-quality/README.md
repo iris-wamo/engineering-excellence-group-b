@@ -21,6 +21,7 @@ The database design this is built from is documented in
 - [Step 4 — Configure and run](#step-4--configure-and-run)
 - [Makefile Targets](#makefile-targets)
 - [Running tests](#running-tests)
+- [Pre-commit hooks](#pre-commit-hooks)
 - [Project layout](#project-layout)
 - [Working with migrations](#working-with-migrations)
 - [Inspecting the database](#inspecting-the-database)
@@ -191,6 +192,8 @@ make help  # or simply `make`
 - `make typecheck` - Runs Mypy to typecheck the codebase.
 - `make lint-fix` - Auto-fixes lint issues and formats code.
 - `make format` - Formats the codebase using Ruff.
+- `make hooks` - Installs the pre-commit git hooks (run once after pulling).
+- `make hooks-run` - Runs all pre-commit hooks against every file.
 - `make test` - Runs all unit tests.
 - `make test-cov` - Runs unit tests with code coverage report.
 - `make migrate` - Runs database migrations (upgrades to head).
@@ -214,6 +217,33 @@ derived from `DATABASE_URL` by appending `_test`) — not SQLite — so the sche
 constraints (enums, unique indexes, etc.) are exercised the same way they are in production.
 Each test creates the tables it needs and drops them afterward, so the database is empty
 between runs.
+
+---
+
+## Pre-commit hooks
+
+Pre-commit runs quality checks automatically before each commit, so lint, formatting, and type errors are caught locally instead of in CI or review.
+The hooks are configured in [`.pre-commit-config.yaml`](.pre-commit-config.yaml):
+
+| Hook | What it does |
+|------|--------------|
+| `trailing-whitespace`, `check-yaml`, `check-toml`, `check-json`, `check-merge-conflict` | Basic file hygiene |
+| `ruff-check` / `ruff-format` | Lints and formats Python code |
+| `mypy` | Static type checking of `app` |
+| `pytest` | Runs the test suite |
+
+`pre-commit` is installed with the dev dependencies (`make install`).
+
+```bash
+make hooks        # or: uv run pre-commit install --config .pre-commit-config.yaml
+```
+
+After that the hooks run automatically on `git commit`. To run every hook against the whole
+codebase:
+
+```bash
+make hooks-run    # or: uv run pre-commit run --all-files
+```
 
 ---
 

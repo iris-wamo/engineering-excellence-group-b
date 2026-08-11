@@ -1,3 +1,5 @@
+"""Async database engine/session setup and the get_db FastAPI dependency."""
+
 from collections.abc import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine

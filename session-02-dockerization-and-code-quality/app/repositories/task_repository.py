@@ -1,3 +1,5 @@
+"""Data access layer for the Task model."""
+
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 

@@ -1,3 +1,5 @@
+"""Application settings loaded from the environment."""
+
 from pydantic import PostgresDsn
 from pydantic_settings import BaseSettings, SettingsConfigDict
 

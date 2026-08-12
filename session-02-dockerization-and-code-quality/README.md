@@ -213,7 +213,8 @@ make help  # or simply `make`
 ### Available Targets:
 - `make install` - Installs Python version, all dependencies via `uv sync`, and copies `.env.example` to `.env` if not present.
 - `make run` - Starts the FastAPI development server with reload.
-- `make lint` - Runs Ruff to lint and format-check the code.
+- `make lint` - Runs Ruff to lint, format-check, and Mypy to typecheck the code.
+- `make typecheck` - Runs Mypy to typecheck the codebase.
 - `make lint-fix` - Auto-fixes lint issues and formats code.
 - `make format` - Formats the codebase using Ruff.
 - `make hooks` - Installs the pre-commit git hooks (run once after pulling).

@@ -34,9 +34,14 @@ install: ## Install python version and all dependencies, and copy .env.example t
 	fi
 
 .PHONY: lint
-lint: ## Lint and check formatting using Ruff
+lint: ## Lint and check formatting using Ruff, and run type checking using Mypy
 	uv run ruff check .
 	uv run ruff format --check .
+	uv run mypy .
+
+.PHONY: typecheck
+typecheck: ## Run static type checking using Mypy
+	uv run mypy .
 
 .PHONY: lint-fix
 lint-fix: ## Auto-fix lint issues and format code

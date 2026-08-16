@@ -1,3 +1,5 @@
+"""The ProjectUser membership model, joining users to projects with a role."""
+
 from datetime import datetime
 from typing import TYPE_CHECKING
 

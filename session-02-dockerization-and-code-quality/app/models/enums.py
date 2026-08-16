@@ -1,3 +1,5 @@
+"""Shared StrEnum types backed by native Postgres ENUM columns."""
+
 from enum import StrEnum
 
 

@@ -1,3 +1,5 @@
+"""API routes for user management."""
+
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Response, status

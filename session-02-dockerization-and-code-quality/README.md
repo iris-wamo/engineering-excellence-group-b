@@ -178,7 +178,10 @@ different port, user, or password.
 
 ## Makefile Targets
 
-We provide a self-documenting `Makefile` to standardize common commands instead of remembering raw `uv run ...` or `uv ...` invocations.
+We use a modular `Makefile` setup to organize tasks cleanly. The main `Makefile` includes task-specific modules located in `makefiles/`:
+- `makefiles/db.mk`: Database shell and migrations
+- `makefiles/quality.mk`: Formatting, linting, and pre-commit hooks
+- `makefiles/testing.mk`: Pytest and coverage tools
 
 To list all available commands in alphabetical order, run:
 ```bash

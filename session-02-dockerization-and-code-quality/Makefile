@@ -9,6 +9,18 @@ help: ## List all available targets in alphabetical order
 db-shell: ## Open an interactive PostgreSQL shell (\q to quit)
 	psql "postgresql://taskflow:taskflow@localhost:5432/taskflow"
 
+.PHONY: docker-up
+docker-up: ## Build and start the app and database with Docker
+	docker compose up --build
+
+.PHONY: docker-down
+docker-down: ## Stop the Docker containers
+	docker compose down
+
+.PHONY: docker-logs
+docker-logs: ## Show logs from the Docker containers
+	docker compose logs -f
+
 .PHONY: format
 format: ## Format Python code using Ruff
 	uv run ruff format .

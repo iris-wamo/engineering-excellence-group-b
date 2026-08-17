@@ -11,6 +11,7 @@ The database design this is built from is documented in
 
 ## Table of contents
 
+- [Run it with Docker](#run-it-with-docker-quickest)
 - [What you need](#what-you-need)
 - [Step 1 — Install uv](#step-1--install-uv)
 - [Step 2 — Install PostgreSQL](#step-2--install-postgresql)
@@ -38,6 +39,30 @@ The database design this is built from is documented in
 
 The project targets **Python 3.12+**, but `uv` downloads and manages that automatically,
 so the only two things you install by hand are uv and PostgreSQL.
+
+---
+
+## Run it with Docker
+
+If you have Docker installed, you don't have to install uv or PostgreSQL yourself.
+From this directory, run:
+
+```bash
+docker compose up --build     # or make docker-up
+```
+
+This does three things for you:
+
+1. builds the app image and starts a PostgreSQL database,
+2. waits for the database, then runs the migrations, and
+3. starts the API on **http://localhost:8000**.
+
+
+How it's set up:
+
+- The database username, password, and name are all `taskflow`, and the app connects to
+  it using the `DATABASE_URL` environment variable set in `docker-compose.yml`.
+- `.dockerignore` lists files that are not copied into the image.
 
 ---
 
@@ -202,6 +227,9 @@ make help  # or simply `make`
 - `make migrate-current` - Shows current database migration revision.
 - `make migrate-history` - Lists all database migration history.
 - `make db-shell` - Opens an interactive `psql` database shell.
+- `make docker-up` - Builds and starts the app and database with Docker.
+- `make docker-down` - Stops the Docker containers.
+- `make docker-logs` - Shows logs from the Docker containers.
 
 
 ---

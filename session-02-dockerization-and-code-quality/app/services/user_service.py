@@ -1,3 +1,5 @@
+"""Business logic for user management."""
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import UserNotFoundError

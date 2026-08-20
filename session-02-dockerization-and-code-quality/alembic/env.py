@@ -1,3 +1,5 @@
+"""Alembic environment configuration for online/offline migrations."""
+
 import asyncio
 from logging.config import fileConfig
 

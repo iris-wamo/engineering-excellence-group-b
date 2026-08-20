@@ -1,3 +1,5 @@
+"""FastAPI application entry point."""
+
 from fastapi import FastAPI
 
 from app.api.v1 import api_router

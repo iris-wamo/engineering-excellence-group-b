@@ -1,3 +1,5 @@
+"""The Project model."""
+
 from typing import TYPE_CHECKING
 
 from sqlalchemy import Integer, String, Text

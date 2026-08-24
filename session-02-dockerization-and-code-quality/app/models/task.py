@@ -1,3 +1,5 @@
+"""The Task model."""
+
 from datetime import date
 from typing import TYPE_CHECKING
 

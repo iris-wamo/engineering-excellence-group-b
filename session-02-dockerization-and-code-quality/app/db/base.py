@@ -1,3 +1,5 @@
+"""Declarative base class and shared timestamp mixin for all models."""
+
 from datetime import datetime
 
 from sqlalchemy import DateTime, func

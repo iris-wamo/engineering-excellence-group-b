@@ -1,3 +1,5 @@
+"""Data access layer for the User model."""
+
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession

@@ -6,8 +6,12 @@ help: ## List all available targets in alphabetical order
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
 .PHONY: db-shell
-db-shell: ## Open an interactive PostgreSQL shell (\q to quit)
+db-shell: ## Open an interactive PostgreSQL shell on the local Postgres (\q to quit)
 	psql "postgresql://taskflow:taskflow@localhost:5432/taskflow"
+
+.PHONY: docker-db-shell
+docker-db-shell: ## Open a psql shell on the Dockerized Postgres (host port 5433)
+	psql "postgresql://taskflow:taskflow@localhost:5433/taskflow"
 
 .PHONY: format
 format: ## Format Python code using Ruff
@@ -79,3 +83,20 @@ test: ## Run the pytest test suite
 .PHONY: test-cov
 test-cov: ## Run the pytest test suite with coverage report
 	uv run pytest --cov=app --cov-report=term-missing
+
+.PHONY: help db-shell docker-db-shell format install lint lint-fix migrate migrate-check migrate-create migrate-current migrate-history docker-build docker-up docker-down docker-logs docker-shell test
+
+docker-build: ## Build Docker images
+	docker compose build
+
+docker-up: ## Start application and database
+	docker compose up -d
+
+docker-down: ## Stop application and database
+	docker compose down
+
+docker-logs: ## Show application logs
+	docker compose logs -f api
+
+docker-shell: ## Open shell inside API container
+	docker compose exec api sh

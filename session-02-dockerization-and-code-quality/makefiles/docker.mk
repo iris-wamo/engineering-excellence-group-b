@@ -21,7 +21,3 @@ docker-logs: ## Show application logs
 .PHONY: docker-shell
 docker-shell: ## Open shell inside API container
 	docker compose exec api sh
-
-.PHONY: docker-test
-docker-test: ## Run the pytest test suite inside the containerized environment
-	docker compose run --rm api pytest

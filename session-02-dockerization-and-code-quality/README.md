@@ -191,15 +191,14 @@ make docker-build             # or docker compose build
 
 # 3. Spin up the application stack (app + database) in the background
 make docker-up                # or docker compose up -d
+```
 
 Once up, the services are available locally:
 * **API**: http://localhost:8000
 * **Swagger Docs**: http://localhost:8000/docs
 
-# 4. Run the test suite inside the containerized environment
-make docker-test              # or docker compose run --rm test
-
-# 5. Bring the containers down
+To stop and remove the containers:
+```bash
 make docker-down              # or docker compose down
 ```
 
@@ -211,7 +210,7 @@ We use a modular `Makefile` setup to organize tasks cleanly. The main `Makefile`
 - `makefiles/db.mk`: Database shell and migrations
 - `makefiles/quality.mk`: Formatting, linting, and pre-commit hooks
 - `makefiles/testing.mk`: Pytest and coverage tools
-- `makefiles/docker.mk`: Docker Compose builds, startup, teardown, and container tests
+- `makefiles/docker.mk`: Docker Compose builds, startup, teardown, and shell access
 
 To list all available commands in alphabetical order, run:
 ```bash

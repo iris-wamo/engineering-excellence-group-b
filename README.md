@@ -31,6 +31,9 @@ See [`session-02-dockerization-and-code-quality/README.md`](session-02-dockeriza
 
 Take the Session 02 API forward with a focus on database correctness, transactions, migrations, and query performance.
 
+See [`session-03-db-transactions-migrations/README.md`](session-03-db-transactions-migrations/README.md) for setup instructions.
+
+
 ## Pull request description format
 
 Every PR in this repository must use the following structure. This applies to every directory/project in this repo, not just the one it's introduced in.

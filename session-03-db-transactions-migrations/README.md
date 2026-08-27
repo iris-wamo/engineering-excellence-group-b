@@ -181,28 +181,46 @@ different port, user, or password.
 
 We provide a self-documenting `Makefile` to standardize common commands instead of remembering raw `uv run ...` or `uv ...` invocations.
 
-To list all available commands in alphabetical order, run:
+To list all available commands grouped by section, run:
 ```bash
 make help  # or simply `make`
 ```
 
-### Available Targets:
+### Available Targets grouped by section:
+
+#### General & Setup
+- `make help` - List all available targets grouped by section.
 - `make install` - Installs Python version, all dependencies via `uv sync`, and copies `.env.example` to `.env` if not present.
 - `make run` - Starts the FastAPI development server with reload.
-- `make lint` - Runs Ruff to lint, format-check, and Mypy to typecheck the code.
-- `make typecheck` - Runs Mypy to typecheck the codebase.
-- `make lint-fix` - Auto-fixes lint issues and formats code.
-- `make format` - Formats the codebase using Ruff.
-- `make hooks` - Installs the pre-commit git hooks (run once after pulling).
-- `make hooks-run` - Runs all pre-commit hooks against every file.
-- `make test` - Runs all unit tests.
-- `make test-cov` - Runs unit tests with code coverage report.
+
+#### Database & Migrations
+- `make db-shell` - Opens an interactive `psql` database shell on the local Postgres.
 - `make migrate` - Runs database migrations (upgrades to head).
 - `make migrate-create m="message"` - Generates a new database migration revision.
 - `make migrate-check` - Verifies database migrations match the current models.
 - `make migrate-current` - Shows current database migration revision.
 - `make migrate-history` - Lists all database migration history.
-- `make db-shell` - Opens an interactive `psql` database shell.
+
+#### Code Quality & Linting
+- `make format` - Formats the codebase using Ruff.
+- `make lint` - Runs Ruff to lint, format-check, and Mypy to typecheck the code.
+- `make typecheck` - Runs Mypy to typecheck the codebase.
+- `make lint-fix` - Auto-fixes lint issues and formats code.
+- `make hooks` - Installs the pre-commit git hooks (run once after pulling).
+- `make hooks-run` - Runs all pre-commit hooks against every file.
+
+#### Testing & Coverage
+- `make test` - Runs all unit tests.
+- `make test-cov` - Runs unit tests with code coverage report.
+
+#### Docker & Containerization
+- `make docker-build` - Build Docker images.
+- `make docker-up` - Start application and database.
+- `make docker-down` - Stop application and database.
+- `make docker-logs` - Show application logs.
+- `make docker-shell` - Open shell inside API container.
+- `make docker-db-shell` - Open a psql shell on the Dockerized Postgres.
+
 
 
 ---

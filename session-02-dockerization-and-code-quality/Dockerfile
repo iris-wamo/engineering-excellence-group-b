@@ -1,12 +1,12 @@
 # syntax=docker/dockerfile:1
-# Base 
+# Base
 FROM python:3.12-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy
-    
+
 WORKDIR /app
 
 # Builder

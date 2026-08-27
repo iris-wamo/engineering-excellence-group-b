@@ -19,6 +19,7 @@ The database design this is built from is documented in
   - [Windows](#windows)
 - [Step 3 — Create the database and user](#step-3--create-the-database-and-user)
 - [Step 4 — Configure and run](#step-4--configure-and-run)
+- [Step 5 — Docker Setup (Alternative)](#step-5---docker-setup-alternative)
 - [Makefile Targets](#makefile-targets)
 - [Running tests](#running-tests)
 - [Pre-commit hooks](#pre-commit-hooks)
@@ -35,9 +36,10 @@ The database design this is built from is documented in
 |------|-----|-------|
 | **uv** | Runs Python and installs dependencies | Also installs the right Python for you — you do **not** need to install Python separately |
 | **PostgreSQL** | The database | Any modern version works |
+| **Docker** | Containerized Dev / Production Setup | Optional alternative setup |
 
 The project targets **Python 3.12+**, but `uv` downloads and manages that automatically,
-so the only two things you install by hand are uv and PostgreSQL.
+so the only two things you install by hand are uv and PostgreSQL (or Docker if running containerized).
 
 ---
 
@@ -176,9 +178,39 @@ different port, user, or password.
 
 ---
 
+## Step 5 — Docker Setup (Alternative)
+
+Alternatively, you can run the application, its migrations, and the Postgres database completely containerized using Docker and Docker Compose.
+
+```bash
+# 1. Create your local env file from the template (if not already done)
+cp .env.example .env
+
+# 2. Build the Docker images
+make docker-build             # or docker compose build
+
+# 3. Spin up the application stack (app + database) in the background
+make docker-up                # or docker compose up -d
+```
+
+Once up, the services are available locally:
+* **API**: http://localhost:8000
+* **Swagger Docs**: http://localhost:8000/docs
+
+To stop and remove the containers:
+```bash
+make docker-down              # or docker compose down
+```
+
+---
+
 ## Makefile Targets
 
-We provide a self-documenting `Makefile` to standardize common commands instead of remembering raw `uv run ...` or `uv ...` invocations.
+We use a modular `Makefile` setup to organize tasks cleanly. The main `Makefile` includes task-specific modules located in `makefiles/`:
+- `makefiles/db.mk`: Database shell and migrations
+- `makefiles/quality.mk`: Formatting, linting, and pre-commit hooks
+- `makefiles/testing.mk`: Pytest and coverage tools
+- `makefiles/docker.mk`: Docker Compose builds, startup, teardown, and shell access
 
 To list all available commands in alphabetical order, run:
 ```bash
@@ -186,22 +218,42 @@ make help  # or simply `make`
 ```
 
 ### Available Targets:
-- `make install` - Installs Python version, all dependencies via `uv sync`, and copies `.env.example` to `.env` if not present.
-- `make run` - Starts the FastAPI development server with reload.
-- `make lint` - Runs Ruff to lint, format-check, and Mypy to typecheck the code.
-- `make typecheck` - Runs Mypy to typecheck the codebase.
-- `make lint-fix` - Auto-fixes lint issues and formats code.
-- `make format` - Formats the codebase using Ruff.
-- `make hooks` - Installs the pre-commit git hooks (run once after pulling).
-- `make hooks-run` - Runs all pre-commit hooks against every file.
-- `make test` - Runs all unit tests.
-- `make test-cov` - Runs unit tests with code coverage report.
-- `make migrate` - Runs database migrations (upgrades to head).
-- `make migrate-create m="message"` - Generates a new database migration revision.
-- `make migrate-check` - Verifies database migrations match the current models.
-- `make migrate-current` - Shows current database migration revision.
-- `make migrate-history` - Lists all database migration history.
-- `make db-shell` - Opens an interactive `psql` database shell.
+```text
+General & Setup:
+  help                 List all available targets grouped by section
+  install              Install python version and all dependencies, and copy .env.example to .env
+  run                  Start the FastAPI development server with reload
+
+Database & Migrations:
+  db-shell             Open DB shell
+  migrate-check        Check migrations status
+  migrate-create       Create new migration (usage: make migrate-create m="message")
+  migrate-current      Show current migration
+  migrate-history      Show migration history
+  migrate              Run migrations
+
+Code Quality & Linting:
+  format               Format code
+  hooks-run            Run all pre-commit hooks
+  hooks                Install pre-commit hooks
+  lint-fix             Fix lint and format
+  lint                 Lint and typecheck
+  typecheck            Run type checking
+
+Testing & Coverage:
+  test-cov             Run tests with coverage
+  test                 Run tests
+
+Docker & Containerization:
+  docker-build         Build Docker images
+  docker-db-shell      Open a psql shell on the Dockerized Postgres (host port 5433)
+  docker-down          Stop application and database
+  docker-logs          Show application logs
+  docker-shell         Open shell inside API container
+  docker-test          Run the pytest test suite inside the containerized environment
+  docker-up            Start application and database
+```
+
 
 
 ---

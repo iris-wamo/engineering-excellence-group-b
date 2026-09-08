@@ -357,9 +357,13 @@ make seed-large
 # 3. Seed database with 50,000 tasks for heavy stress testing
 make seed-huge
 
-# 4. Perform a clean table truncation and re-seed
+# 4. Wipe / truncate all database tables leaving an empty schema (0 rows)
+make db-clean
+
+# 5. Perform a clean table truncation and re-seed
 make db-reset
 ```
+
 
 
 
@@ -379,12 +383,12 @@ uv run python scripts/seed_data.py --reset --users 50 --projects 10 --tasks 5000
 ==================================================
 Time Taken       : 0.42 seconds
 --------------------------------------------------
-Table Name           | Row Count      
+Table Name           | Row Count
 --------------------------------------------------
-user                 | 10             
-project              | 5              
-project_user         | 18             
-task                 | 200            
+user                 | 10
+project              | 5
+project_user         | 18
+task                 | 200
 ==================================================
 ```
 

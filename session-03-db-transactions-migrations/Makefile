@@ -1,6 +1,7 @@
 .DEFAULT_GOAL := help
 
 include makefiles/db.mk
+include makefiles/seed.mk
 include makefiles/quality.mk
 include makefiles/testing.mk
 include makefiles/docker.mk
@@ -15,6 +16,8 @@ help: ## List all available targets grouped by section
 			section="General & Setup"; \
 		elif [ "$$short_name" = "db" ]; then \
 			section="Database & Migrations"; \
+		elif [ "$$short_name" = "seed" ]; then \
+			section="Data Seeding"; \
 		elif [ "$$short_name" = "quality" ]; then \
 			section="Code Quality & Linting"; \
 		elif [ "$$short_name" = "testing" ]; then \
@@ -27,6 +30,7 @@ help: ## List all available targets grouped by section
 		printf "\n\033[1;35m%s\033[0m:\n" "$$section"; \
 		grep -E '^[a-zA-Z_-]+:.*?## .*$$' $$file | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'; \
 	done
+
 
 .PHONY: install
 install: ## Install python version and all dependencies, and copy .env.example to .env

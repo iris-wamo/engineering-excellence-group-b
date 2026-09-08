@@ -36,12 +36,12 @@ Seeding 200 tasks (batch size: 1000)...
 ==================================================
 Time Taken       : 0.11 seconds
 --------------------------------------------------
-Table Name           | Row Count      
+Table Name           | Row Count
 --------------------------------------------------
-user                 | 10             
-project              | 5              
-project_user         | 23             
-task                 | 200            
+user                 | 10
+project              | 5
+project_user         | 23
+task                 | 200
 ==================================================
 ```
 
@@ -72,12 +72,12 @@ Seeding 10000 tasks (batch size: 1000)...
 ==================================================
 Time Taken       : 1.08 seconds
 --------------------------------------------------
-Table Name           | Row Count      
+Table Name           | Row Count
 --------------------------------------------------
-user                 | 100            
-project              | 25             
-project_user         | 786            
-task                 | 10000          
+user                 | 100
+project              | 25
+project_user         | 786
+task                 | 10000
 ==================================================
 ```
 
@@ -101,14 +101,65 @@ Seeding 50000 tasks (batch size: 1000)...
 ==================================================
 Time Taken       : 5.01 seconds
 --------------------------------------------------
-Table Name           | Row Count      
+Table Name           | Row Count
 --------------------------------------------------
-user                 | 200            
-project              | 50             
-project_user         | 2699           
-task                 | 50000          
+user                 | 200
+project              | 50
+project_user         | 2699
+task                 | 50000
 ==================================================
 ```
+
+#### Database Reset & Re-Seed (`make db-reset`)
+```text
+$ make db-reset
+uv run python scripts/seed_data.py --reset
+Starting seed process (Target: 10 users, 5 projects, 200 tasks)...
+Clearing existing data...
+Database truncated successfully.
+Seeding 10 users...
+Seeding 5 projects...
+Seeding project memberships...
+Seeding 200 tasks (batch size: 1000)...
+  Inserted tasks 1 to 200...
+
+==================================================
+ SEEDING COMPLETE
+==================================================
+Time Taken       : 0.11 seconds
+--------------------------------------------------
+Table Name           | Row Count
+--------------------------------------------------
+user                 | 10
+project              | 5
+project_user         | 23
+task                 | 200
+==================================================
+```
+
+#### Empty Database / Row Truncation (`make db-clean`)
+```text
+$ make db-clean
+uv run python scripts/seed_data.py --clean-only
+Starting clean reset process (Wiping all data)...
+Clearing existing data...
+Database truncated successfully.
+
+==================================================
+ SEEDING COMPLETE
+==================================================
+Time Taken       : 0.06 seconds
+--------------------------------------------------
+Table Name           | Row Count
+--------------------------------------------------
+user                 | 0
+project              | 0
+project_user         | 0
+task                 | 0
+==================================================
+```
+
+
 
 
 ---

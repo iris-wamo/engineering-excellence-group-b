@@ -200,6 +200,10 @@ make help  # or simply `make`
 - `make migrate-check` - Verifies database migrations match the current models.
 - `make migrate-current` - Shows current database migration revision.
 - `make migrate-history` - Lists all database migration history.
+- `make seed` - Seeds the database with default local demo data.
+- `make seed-large` - Seeds the database with 10,000 tasks for query performance benchmarking.
+- `make db-reset` - Resets database tables and re-seeds cleanly.
+
 
 #### Code Quality & Linting
 - `make format` - Formats the codebase using Ruff.
@@ -336,6 +340,56 @@ uv run alembic check          # or use make migrate-check
 > can't see it and will even try to *drop* the table if it already exists.
 
 ---
+
+## Seeding & Performance Test Data
+
+The project includes a dedicated, high-performance database seeding script (`scripts/seed_data.py`) separated from Alembic schema migrations. It generates realistic data for users, projects, memberships, and tasks.
+
+### Quick Commands
+
+```bash
+# 1. Seed database with default local demo data (~200 tasks)
+make seed
+
+# 2. Seed database with 10,000 tasks for query performance & EXPLAIN ANALYZE testing
+make seed-large
+
+# 3. Seed database with 50,000 tasks for heavy stress testing
+make seed-huge
+
+# 4. Perform a clean table truncation and re-seed
+make db-reset
+```
+
+
+
+### Custom Options
+
+You can also run `scripts/seed_data.py` directly with custom volume parameters:
+
+```bash
+uv run python scripts/seed_data.py --reset --users 50 --projects 10 --tasks 5000 --batch-size 1000
+```
+
+### Example Terminal Summary Output
+
+```
+==================================================
+ SEEDING COMPLETE
+==================================================
+Time Taken       : 0.42 seconds
+--------------------------------------------------
+Table Name           | Row Count      
+--------------------------------------------------
+user                 | 10             
+project              | 5              
+project_user         | 18             
+task                 | 200            
+==================================================
+```
+
+---
+
 
 ## Inspecting the database
 

@@ -225,6 +225,8 @@ make help  # or simply `make`
 - `make docker-shell` - Open shell inside API container.
 - `make docker-db-shell` - Open a psql shell on the Dockerized Postgres.
 
+> **Note on host commands with Docker**: When the stack is running via `make docker-up`, PostgreSQL is mapped to host port **5433** (via `compose.override.yaml`). Ensure `DATABASE_URL` in `.env` uses `localhost:5433` (e.g. `postgresql+asyncpg://taskflow:taskflow@localhost:5433/taskflow`) so that host make commands (`make seed`, `make migrate`, `make test`) connect to the container database.
+
 
 
 ---

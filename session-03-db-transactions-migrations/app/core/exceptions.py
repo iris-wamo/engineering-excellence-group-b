@@ -80,6 +80,13 @@ class UserNotFoundError(NotFoundError):
         )
 
 
+class TransactionSimulationError(AppError):
+    """Raised when a transaction failure is simulated for demonstration or testing."""
+
+    code = "SIMULATED_TRANSACTION_FAILURE"
+    status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
+
+
 def error_json(
     status_code: int, code: str, message: str, details: list[dict[str, Any]] | None = None
 ) -> JSONResponse:

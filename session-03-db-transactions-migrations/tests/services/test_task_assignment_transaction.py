@@ -4,10 +4,15 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import NotFoundError, TransactionSimulationError
+from app.core.exceptions import (
+    NotFoundError,
+    ProjectMembershipRequiredError,
+    TransactionSimulationError,
+)
 from app.models.activity_log import ActivityLog
-from app.models.enums import TaskStatus
+from app.models.enums import ProjectRole, TaskStatus
 from app.models.notification import Notification
+from app.models.project_user import ProjectUser
 from app.models.task import Task
 from app.models.task_assignment_history import TaskAssignmentHistory
 from app.models.task_status_history import TaskStatusHistory
@@ -32,6 +37,21 @@ async def sample_assignment_data(db_session: AsyncSession):
         db_session, UserCreate(name="Charlie Dev", email="charlie.dev@example.com")
     )
     project = await ProjectService.create_project(db_session, ProjectCreate(name="Core Platform"))
+
+    # Establish project memberships
+    db_session.add_all(
+        [
+            ProjectUser(project_id=project.id, user_id=user_creator.id, role=ProjectRole.owner),
+            ProjectUser(project_id=project.id, user_id=user_assignee.id, role=ProjectRole.member),
+            ProjectUser(
+                project_id=project.id,
+                user_id=user_second_assignee.id,
+                role=ProjectRole.member,
+            ),
+        ]
+    )
+    await db_session.commit()
+
     task = await TaskService.create_task(
         db_session,
         TaskCreate(
@@ -321,3 +341,56 @@ async def test_assign_task_nonexistent_user_raises_not_found(
             task_id=task_id,
             data=TaskAssignRequest(assignee_id=99999),
         )
+
+
+async def test_assign_task_non_member_raises_membership_error(
+    db_session: AsyncSession, sample_assignment_data: dict
+) -> None:
+    """Tests that assigning to a valid user who is not a member of the project is rejected."""
+    data = sample_assignment_data
+    task_id = data["task"].id
+    non_member = await UserService.create_user(
+        db_session, UserCreate(name="External Dev", email="external.dev@example.com")
+    )
+
+    with pytest.raises(ProjectMembershipRequiredError) as exc_info:
+        await TaskService.assign_task(
+            db_session,
+            task_id=task_id,
+            data=TaskAssignRequest(assignee_id=non_member.id),
+        )
+
+    assert exc_info.value.code == "PROJECT_MEMBERSHIP_REQUIRED"
+    assert exc_info.value.status_code == 400
+
+
+async def test_assign_task_non_member_does_not_mutate_db(
+    db_session: AsyncSession, sample_assignment_data: dict
+) -> None:
+    """Tests that a rejected assignment due to non-membership creates zero records in DB."""
+    data = sample_assignment_data
+    task_id = data["task"].id
+    non_member = await UserService.create_user(
+        db_session, UserCreate(name="External Dev 2", email="external2@example.com")
+    )
+
+    with pytest.raises(ProjectMembershipRequiredError):
+        await TaskService.assign_task(
+            db_session,
+            task_id=task_id,
+            data=TaskAssignRequest(assignee_id=non_member.id, status=TaskStatus.in_progress),
+        )
+
+    # Re-verify task and audit tables
+    db_session.expire_all()
+    task = await db_session.get(Task, task_id)
+    assert task is not None
+    assert task.assignee_id is None
+    assert task.status == TaskStatus.todo
+
+    hist_count = await db_session.scalar(
+        select(func.count())
+        .select_from(TaskAssignmentHistory)
+        .where(TaskAssignmentHistory.task_id == task_id)
+    )
+    assert hist_count == 0

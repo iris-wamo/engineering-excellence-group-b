@@ -16,9 +16,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from app.core.config import settings
 from app.core.exceptions import TransactionSimulationError
 from app.models.activity_log import ActivityLog
-from app.models.enums import TaskStatus
+from app.models.enums import ProjectRole, TaskStatus
 from app.models.notification import Notification
 from app.models.project import Project
+from app.models.project_user import ProjectUser
 from app.models.task import Task
 from app.models.task_assignment_history import TaskAssignmentHistory
 from app.models.task_status_history import TaskStatusHistory
@@ -131,6 +132,15 @@ async def main() -> None:
         await session.refresh(alice)
         await session.refresh(bob)
         await session.refresh(charlie)
+
+        session.add_all(
+            [
+                ProjectUser(project_id=project.id, user_id=alice.id, role=ProjectRole.owner),
+                ProjectUser(project_id=project.id, user_id=bob.id, role=ProjectRole.member),
+                ProjectUser(project_id=project.id, user_id=charlie.id, role=ProjectRole.member),
+            ]
+        )
+        await session.commit()
 
         task = Task(
             title="Implement Transaction Safety",

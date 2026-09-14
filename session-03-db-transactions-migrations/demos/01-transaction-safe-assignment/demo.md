@@ -129,18 +129,21 @@ Task ID=2 | Title='Implement Transaction Safety' | Status='in_progress' | Assign
 ### 2. Pytest Execution Evidence
 ```text
 ============================= test session starts ==============================
-collected 7 items
+collected 11 items
 
-tests/services/test_task_assignment_transaction.py::test_assign_task_success_all_records_created PASSED [ 14%]
-tests/services/test_task_assignment_transaction.py::test_reassign_task_success PASSED          [ 28%]
-tests/services/test_task_assignment_transaction.py::test_assign_task_without_status_transition PASSED [ 42%]
-tests/services/test_task_assignment_transaction.py::test_unassign_task_success PASSED         [ 57%]
-tests/services/test_task_assignment_transaction.py::test_assign_task_mid_transaction_failure_rolls_back_everything PASSED [ 71%]
-tests/services/test_task_assignment_transaction.py::test_assign_task_nonexistent_user_raises_not_found PASSED [ 85%]
-tests/api/test_tasks_assignment_api.py::test_api_assign_task_success PASSED                     [ 92%]
-tests/api/test_tasks_assignment_api.py::test_api_assign_task_failure_rollback PASSED            [100%]
+tests/services/test_task_assignment_transaction.py::test_assign_task_success_all_records_created PASSED [  9%]
+tests/services/test_task_assignment_transaction.py::test_reassign_task_success PASSED [ 18%]
+tests/services/test_task_assignment_transaction.py::test_assign_task_without_status_transition PASSED [ 27%]
+tests/services/test_task_assignment_transaction.py::test_unassign_task_success PASSED [ 36%]
+tests/services/test_task_assignment_transaction.py::test_assign_task_mid_transaction_failure_rolls_back_everything PASSED [ 45%]
+tests/services/test_task_assignment_transaction.py::test_assign_task_nonexistent_user_raises_not_found PASSED [ 54%]
+tests/services/test_task_assignment_transaction.py::test_assign_task_non_member_raises_membership_error PASSED [ 63%]
+tests/services/test_task_assignment_transaction.py::test_assign_task_non_member_does_not_mutate_db PASSED [ 72%]
+tests/api/test_tasks_assignment_api.py::test_api_assign_task_success PASSED [ 81%]
+tests/api/test_tasks_assignment_api.py::test_api_assign_task_failure_rollback PASSED [ 90%]
+tests/api/test_tasks_assignment_api.py::test_api_assign_task_non_member_returns_400 PASSED [100%]
 
-============================== 7 passed in 0.42s ===============================
+============================== 11 passed in 1.18s ==============================
 ```
 
 ## Evidence

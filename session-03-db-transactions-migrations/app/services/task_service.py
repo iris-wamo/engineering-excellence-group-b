@@ -1,12 +1,16 @@
-"""Business logic for task management."""
-
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import NotFoundError, TransactionSimulationError
+from app.core.exceptions import (
+    NotFoundError,
+    ProjectMembershipRequiredError,
+    TransactionSimulationError,
+)
 from app.models.activity_log import ActivityLog
 from app.models.enums import TaskPriority, TaskStatus
 from app.models.notification import Notification
 from app.models.project import Project
+from app.models.project_user import ProjectUser
 from app.models.task import Task
 from app.models.task_assignment_history import TaskAssignmentHistory
 from app.models.task_status_history import TaskStatusHistory
@@ -51,6 +55,21 @@ async def _get_task_or_404(db: AsyncSession, task_id: int) -> Task:
             details=[{"field": "task_id", "message": f"Task {task_id} does not exist"}],
         )
     return task
+
+
+async def _verify_project_membership(db: AsyncSession, user_id: int, project_id: int) -> None:
+    has_members = await db.scalar(
+        select(func.count()).select_from(ProjectUser).where(ProjectUser.project_id == project_id)
+    )
+    if has_members and has_members > 0:
+        membership = await db.scalar(
+            select(ProjectUser).where(
+                ProjectUser.project_id == project_id,
+                ProjectUser.user_id == user_id,
+            )
+        )
+        if membership is None:
+            raise ProjectMembershipRequiredError(user_id=user_id, project_id=project_id)
 
 
 class TaskService:
@@ -134,6 +153,7 @@ class TaskService:
         task = await _get_task_or_404(db, task_id)
         if data.assignee_id is not None:
             await _get_user_or_404(db, data.assignee_id, "assignee_id")
+            await _verify_project_membership(db, data.assignee_id, task.project_id)
         if data.assigned_by_id is not None:
             await _get_user_or_404(db, data.assigned_by_id, "assigned_by_id")
 

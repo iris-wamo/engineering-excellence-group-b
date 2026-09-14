@@ -80,6 +80,24 @@ class UserNotFoundError(NotFoundError):
         )
 
 
+class ProjectMembershipRequiredError(AppError):
+    """Raised when assigning a task to a user who is not a member of the project."""
+
+    code = "PROJECT_MEMBERSHIP_REQUIRED"
+    status_code = status.HTTP_400_BAD_REQUEST
+
+    def __init__(self, user_id: int, project_id: int) -> None:
+        super().__init__(
+            "User is not a member of this project",
+            details=[
+                {
+                    "field": "assignee_id",
+                    "message": f"User {user_id} is not a member of project {project_id}",
+                }
+            ],
+        )
+
+
 class TransactionSimulationError(AppError):
     """Raised when a transaction failure is simulated for demonstration or testing."""
 

@@ -2,7 +2,7 @@
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import ForeignKey, Integer
+from sqlalchemy import ForeignKey, Index, Integer
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin
@@ -14,6 +14,12 @@ if TYPE_CHECKING:
 
 class TaskAssignmentHistory(Base, TimestampMixin):
     __tablename__ = "task_assignment_history"
+    __table_args__ = (
+        Index(
+            "ix_task_assignment_history_new_assignee_id",
+            "new_assignee_id",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     task_id: Mapped[int] = mapped_column(

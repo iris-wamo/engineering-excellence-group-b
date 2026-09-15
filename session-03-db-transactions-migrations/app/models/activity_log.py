@@ -2,7 +2,7 @@
 
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import ForeignKey, Integer, String
+from sqlalchemy import CheckConstraint, ForeignKey, Index, Integer, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -14,6 +14,14 @@ if TYPE_CHECKING:
 
 class ActivityLog(Base, TimestampMixin):
     __tablename__ = "activity_log"
+    __table_args__ = (
+        CheckConstraint(
+            "entity_type IN ('task', 'project', 'user')",
+            name="ck_activity_log_entity_type",
+        ),
+        Index("ix_activity_log_entity", "entity_type", "entity_id"),
+        Index("ix_activity_log_actor_id", "actor_id"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     actor_id: Mapped[int | None] = mapped_column(

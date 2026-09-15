@@ -1,10 +1,8 @@
 # Demo: Transaction-Safe Task Assignment Flow
 
 ## Loom Video
-https://www.loom.com/share/08584079a2994335b8feac81cf75b7a8
 
-https://www.loom.com/share/aa15d643939b4fd6a514f8746d272f8b
-
+https://www.loom.com/share/3e0648e286a641568a5c04281c8896a0
 
 
 ## Objective

@@ -2,7 +2,7 @@
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Integer, String, Text
+from sqlalchemy import Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin
@@ -14,9 +14,14 @@ if TYPE_CHECKING:
 
 class Project(Base, TimestampMixin):
     __tablename__ = "project"
+    __table_args__ = (
+        UniqueConstraint("slug", name="uq_project_slug"),
+        Index("ix_project_slug", "slug"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(150), nullable=False)
+    slug: Mapped[str] = mapped_column(String(80), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     tasks: Mapped[list["Task"]] = relationship(

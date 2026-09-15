@@ -67,6 +67,30 @@ class TaskStatusUpdate(BaseModel):
     )
 
 
+class TaskAssignRequest(BaseModel):
+    """Schema for assigning or reassigning a task."""
+
+    assignee_id: int | None = Field(
+        None,
+        description="New assignee user ID (or None to unassign).",
+        examples=[5],
+    )
+    assigned_by_id: int | None = Field(
+        None,
+        description="User ID performing the assignment.",
+        examples=[1],
+    )
+    status: TaskStatus | None = Field(
+        None,
+        description="Optional status update during assignment.",
+        examples=["in_progress"],
+    )
+    simulate_failure: bool = Field(
+        default=False,
+        description="Flag to simulate a mid-transaction failure for rollback demonstration.",
+    )
+
+
 class TaskResponse(BaseModel):
     """Schema for returning task details."""
 

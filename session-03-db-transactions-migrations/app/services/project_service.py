@@ -1,5 +1,7 @@
 """Business logic for project management."""
 
+import re
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import NotFoundError
@@ -8,11 +10,17 @@ from app.repositories.project_repository import ProjectRepository
 from app.schemas.project import ProjectCreate
 
 
+def _slugify(name: str) -> str:
+    """Convert a project name into a URL-safe slug."""
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+
+
 class ProjectService:
     @staticmethod
     async def create_project(db: AsyncSession, payload: ProjectCreate) -> Project:
+        slug = _slugify(payload.name)
         return await ProjectRepository.create(
-            db, name=payload.name, description=payload.description
+            db, name=payload.name, slug=slug, description=payload.description
         )
 
     @staticmethod

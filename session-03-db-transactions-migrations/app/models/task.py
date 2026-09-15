@@ -3,7 +3,7 @@
 from datetime import date
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Date, Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import Date, Enum, ForeignKey, Index, Integer, String, Text, desc
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin
@@ -16,6 +16,17 @@ if TYPE_CHECKING:
 
 class Task(Base, TimestampMixin):
     __tablename__ = "task"
+    __table_args__ = (
+        # This index helps the task listing endpoint find tasks by status and priority
+        # and return them with the newest tasks first. PostgreSQL can use the index for
+        # both filtering and sorting, but it decides the best approach based on the data.
+        Index(
+            "ix_task_status_priority_id",
+            "status",
+            "priority",
+            desc("id"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)

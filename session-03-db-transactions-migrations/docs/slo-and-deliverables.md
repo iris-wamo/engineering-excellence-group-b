@@ -174,3 +174,7 @@ All Alembic schema migrations must execute cleanly forward (`alembic upgrade hea
 
 ### Query Performance SLO
 Task filtering queries on large datasets (10,000+ rows) must show measurable performance improvement after adding index strategies, documented via `EXPLAIN ANALYZE`.
+
+### Import Debuggability SLO
+Raw task-import payloads must be stored in MongoDB via PyMongo before validation/normalization into PostgreSQL. The MongoDB document must link bidirectionally to the PostgreSQL task record (`Task.mongo_import_id` <-> `raw_task_imports._id` and `raw_task_imports.postgres_task_id` <-> `Task.id`). Failed imports must stay traceable in MongoDB with status `"FAILED"` and exception `error_details` without dropping data or inserting corrupt rows into PostgreSQL.
+

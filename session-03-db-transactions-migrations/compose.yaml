@@ -18,6 +18,11 @@ services:
       timeout: 3s
       retries: 5
 
+  mongo:
+    image: mongo:7.0
+    ports:
+      - "27017:27017"
+
   api:
     build:
       context: .

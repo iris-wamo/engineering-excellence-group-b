@@ -164,10 +164,46 @@ task                 | 0
 
 ---
 
-## 2. Additional Session 03 SLOs (Overview)
+## 2. Correctness SLO (Task Assignment Transaction Safety)
 
-### Correctness SLO
-Task assignment operations must be transaction-safe. If any sub-operation (assignee update, assignment history, activity log) fails, the entire transaction rolls back cleanly without partial writes.
+### Objective
+Guarantee absolute atomicity and referential consistency across multi-table business operations. When assigning or reassigning a task, all affected entities must be updated and recorded as a single business operation within a strict transaction boundary. Any failure midway through the process must trigger an immediate, full rollback resulting in zero orphaned or partial rows.
+
+### Target Specifications
+- **Single Transaction Boundary**: Staging all related entity writes (`task`, `task_assignment_history`, `task_status_history`, `activity_log`, `notification`) inside an active `AsyncSession` before calling `await db.commit()`.
+- **Atomic Rollback Guarantee**: If an exception occurs at any point before commit (simulated via `simulate_failure=True` or unexpected database/network faults), `await db.rollback()` is invoked and the database remains in its exact pre-operation state (0 partial rows persisted).
+- **Project Membership Validation**: Assignees must be validated against `project_user` membership when memberships exist. Assigning tasks to non-members is rejected immediately with HTTP 400 (`PROJECT_MEMBERSHIP_REQUIRED`), preventing invalid assignments and guaranteeing zero database mutations.
+- **Transactional Notification Outbox**: Notifications are created transactionally in `pending` status within the database boundary. Actual dispatch (email/push/webhook) is decoupled from the transaction, eliminating partial state if dispatch fails.
+
+### Verification Execution Summary
+
+#### 1. Success Case State Transition
+| Entity / Table | Pre-Operation State | Post-Success State (`assignee_id = 15`) | Net Mutation |
+|---|---|---|---|
+| `task` | `status = todo`, `assignee_id = None` | `status = in_progress`, `assignee_id = 15` | 1 row updated |
+| `task_assignment_history` | 0 rows | 1 row (`prev=None`, `new=15`) | +1 row |
+| `task_status_history` | 0 rows | 1 row (`todo -> in_progress`) | +1 row |
+| `activity_log` | 0 rows | 1 row (`action='TASK_ASSIGNED'`) | +1 row |
+| `notification` | 0 rows | 1 row (`status='pending'`, recipient=15) | +1 row |
+
+#### 2. Mid-Transaction Failure & Rollback Proof
+When reassigning from Bob (`15`) to Charlie with `simulate_failure=True`:
+- Forced mid-flow exception: `TransactionSimulationError: Simulated failure midway through task assignment transaction`
+- Database rollback invoked: `await db.rollback()`
+- Re-query results (`db_session.expire_all()`):
+  - `task.assignee_id` remains Bob (`15`)
+  - `task.status` remains `in_progress`
+  - `task_assignment_history` count remains 1 (0 rows for Charlie)
+  - `task_status_history` count remains 1
+  - `activity_log` count remains 1
+  - `notification` count remains 1
+  - **Atomicity Checklist**: All checks **PASS** with 0 partial writes.
+
+For full logs, SQL inspection, and Loom video evidence, see [`demos/01-transaction-safe-assignment/demo.md`](../demos/01-transaction-safe-assignment/demo.md).
+
+---
+
+## 3. Additional Session 03 SLOs (Overview)
 
 ### Migration Safety SLO
 All Alembic schema migrations must execute cleanly forward (`alembic upgrade head`) and backward (`alembic downgrade -1`) on both empty databases and databases populated with seed data.

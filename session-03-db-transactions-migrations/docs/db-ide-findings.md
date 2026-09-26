@@ -2,7 +2,7 @@
 
 ## 1. Executive Summary & Objective
 
-This document records direct PostgreSQL database inspection findings using **DBeaver 26.2.0** for the `taskflow` database in **Session 03**. 
+This document records direct PostgreSQL database inspection findings using **DBeaver 26.2.0** for the `taskflow` database in **Session 03**.
 
 Direct database observability validates database state, schema constraints, migration revisions, and query execution plans independently of the FastAPI application layer.
 
@@ -68,8 +68,8 @@ Direct inspection of the database index tree confirms that all primary key, uniq
 To evaluate query performance on 10,000 tasks (`make seed-large`), we ran an `EXPLAIN ANALYZE` query filtering tasks by status and priority:
 
 ```sql
-EXPLAIN ANALYZE 
-SELECT * FROM task 
+EXPLAIN ANALYZE
+SELECT * FROM task
 WHERE status = 'in_progress' AND priority = 'high';
 ```
 

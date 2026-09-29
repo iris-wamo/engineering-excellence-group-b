@@ -79,11 +79,56 @@ database clean.
 
 ## Actual Findings
 
-<!-- TODO: fill in after re-running with evidence -->
+The reproduction matched the expected behavior exactly:
+
+- Terminal 1 locked task id 1, Terminal 2 locked task id 2, then Terminal 2's attempt to update
+  task id 1 blocked (as expected, waiting on Terminal 1's lock).
+- When Terminal 1 then tried to update task id 2 (held by Terminal 2), Postgres's deadlock
+  detector fired almost immediately and killed **Terminal 1's** transaction with
+  `ERROR: deadlock detected`, automatically rolling it back and releasing its lock on task id 1.
+- That release unblocked Terminal 2 immediately — its pending `UPDATE task ... WHERE id = 1`
+  completed right away (`UPDATE 1`), with no manual intervention needed.
+- The deadlock error's `DETAIL` line confirms the circular wait: Terminal 1's process (20023) was
+  waiting on Terminal 2's transaction, while Terminal 2's process (20032) was simultaneously
+  waiting on Terminal 1's transaction.
 
 ## Evidence
 
-<!-- TODO: paste both terminals' full output here, including the `ERROR: deadlock detected` block -->
+**Terminal 1** (the deadlock victim — its transaction was cancelled and rolled back):
+
+```
+➜  session-03-db-transactions-migrations git:(main) ✗ psql "postgresql://taskflow:taskflow@localhost:5433/taskflow"
+psql (18.4 (Homebrew), server 16.15)
+Type "help" for help.
+
+taskflow=# BEGIN;
+UPDATE task SET status = 'in_progress' WHERE id = 1;
+BEGIN
+UPDATE 1
+taskflow=*# UPDATE task SET status = 'done' WHERE id = 2;
+ERROR:  deadlock detected
+DETAIL:  Process 20023 waits for ShareLock on transaction 754; blocked by process 20032.
+Process 20032 waits for ShareLock on transaction 753; blocked by process 20023.
+HINT:  See server log for query details.
+CONTEXT:  while updating tuple (0,2) in relation "task"
+taskflow=!# \q
+```
+
+**Terminal 2** (the survivor — blocked, then completed once Terminal 1 was rolled back):
+
+```
+➜  session-03-db-transactions-migrations git:(main) ✗ psql "postgresql://taskflow:taskflow@localhost:5433/taskflow"
+psql (18.4 (Homebrew), server 16.15)
+Type "help" for help.
+
+taskflow=# BEGIN;
+UPDATE task SET status = 'in_progress' WHERE id = 2;
+BEGIN
+UPDATE 1
+taskflow=*# UPDATE task SET status = 'done' WHERE id = 1;
+UPDATE 1
+taskflow=*#
+```
 
 ## What We Learned
 

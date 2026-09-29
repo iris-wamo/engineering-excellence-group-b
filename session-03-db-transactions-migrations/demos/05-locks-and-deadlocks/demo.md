@@ -2,7 +2,7 @@
 
 ## Loom Video
 
-<!-- TODO: add Loom link -->
+https://www.loom.com/share/1153f6b42e5f4158b04c7103b6b209b4
 
 ## Objective
 

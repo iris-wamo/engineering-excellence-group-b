@@ -11,6 +11,7 @@ dependencies = [
     "fastapi==0.139.0",
     "greenlet==3.5.4",
     "pydantic-settings==2.14.2",
+    "pymongo>=4.6.0",
     "sqlalchemy==2.0.51",
     "uvicorn[standard]==0.50.2",
 ]

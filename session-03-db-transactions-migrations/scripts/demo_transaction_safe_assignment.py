@@ -121,7 +121,11 @@ async def main() -> None:
 
     async with session_factory() as session:
         print("\n STEP 1: Seeding Initial Data (Project, 2 Users, 1 Task)")
-        project = Project(name="Phoenix Platform", description="Core modernization project")
+        project = Project(
+            name="Phoenix Platform",
+            slug="phoenix-platform",
+            description="Core modernization project",
+        )
         t = asyncio.get_event_loop().time()
         alice = User(name="Alice Lead", email=f"alice_{t}@example.com")
         bob = User(name="Bob Dev", email=f"bob_{t}@example.com")

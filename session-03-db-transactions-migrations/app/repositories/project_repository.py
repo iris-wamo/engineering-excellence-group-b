@@ -8,8 +8,8 @@ from app.models.project import Project
 
 class ProjectRepository:
     @staticmethod
-    async def create(db: AsyncSession, *, name: str, description: str | None) -> Project:
-        project = Project(name=name, description=description)
+    async def create(db: AsyncSession, *, name: str, slug: str, description: str | None) -> Project:
+        project = Project(name=name, slug=slug, description=description)
         try:
             db.add(project)
             await db.commit()

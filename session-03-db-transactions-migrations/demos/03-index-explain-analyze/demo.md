@@ -2,7 +2,7 @@
 
 ## Loom Video
 
-TODO: add Loom recording link.
+https://www.loom.com/share/c5b48b31b1c345448385c922423dcd8c
 
 ## Objective
 

@@ -7,6 +7,7 @@ Supports clean table reset and batch insertion for high performance.
 import argparse
 import asyncio
 import random
+import re
 import sys
 import time
 from datetime import date, timedelta
@@ -135,9 +136,11 @@ def generate_projects(count: int) -> list[dict[str, Any]]:
     for i in range(1, count + 1):
         base_name = PROJECT_NAMES[(i - 1) % len(PROJECT_NAMES)]
         name = f"{base_name} {i}" if i > len(PROJECT_NAMES) else base_name
+        slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
         projects.append(
             {
                 "name": name,
+                "slug": slug,
                 "description": f"Engineering initiative focused on {name.lower()}.",
             }
         )

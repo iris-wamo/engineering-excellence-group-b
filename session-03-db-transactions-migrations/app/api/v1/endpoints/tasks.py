@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.models.enums import TaskPriority, TaskStatus
 from app.schemas.task import (
+    TaskAssignRequest,
     TaskCreate,
     TaskListResponse,
     TaskResponse,
@@ -63,3 +64,13 @@ async def update_task_status(
 ) -> TaskResponse:
     """Update the status of an existing task."""
     return await TaskService.update_task_status(db, task_id, payload)
+
+
+@router.post("/{task_id}/assign", response_model=TaskResponse)
+async def assign_task(
+    task_id: int,
+    payload: TaskAssignRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> TaskResponse:
+    """Assign or reassign a task in a transaction-safe manner."""
+    return await TaskService.assign_task(db, task_id, payload)

@@ -300,7 +300,9 @@ tests/
   auth/                Authentication & RBAC security tests
   fixtures/            Reusable test fixtures and factory helpers
 docs/                  Architecture boundaries, workflow design, RBAC matrix, and SLOs
-demos/                 Reproducible demo guides and Loom recordings
+demos/
+  session-03/          Preserved demos from Session 03
+  session-04/          Reproducible demo guides and Loom recordings for Session 04
 .env.example           Template for local .env
 ```
 

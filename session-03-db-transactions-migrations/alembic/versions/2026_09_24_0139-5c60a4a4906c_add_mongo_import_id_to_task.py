@@ -1,8 +1,8 @@
 """add_mongo_import_id_to_task
 
 Revision ID: 5c60a4a4906c
-Revises: aae8fcd27de6
-Create Date: 2026-09-24 01:39:53.986755
+# Revises: cd823c0995ed
+# Create Date: 2026-09-24 01:39:53.986755
 
 """
 
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "5c60a4a4906c"
-down_revision: str | None = "aae8fcd27de6"
+down_revision: str | None = "cd823c0995ed"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

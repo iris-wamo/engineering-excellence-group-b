@@ -1,8 +1,8 @@
 """add composite index on task status priority id
 
 Revision ID: f7715786b494
-Revises: aae8fcd27de6
-Create Date: 2026-09-12 11:43:42.784728
+# Revises: 5c60a4a4906c
+# Create Date: 2026-09-12 11:43:42.784728
 
 """
 
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "f7715786b494"
-down_revision: str | None = "aae8fcd27de6"
+down_revision: str | None = "5c60a4a4906c"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

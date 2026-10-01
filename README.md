@@ -34,6 +34,13 @@ Take the Session 02 API forward with a focus on database correctness, transactio
 See [`session-03-db-transactions-migrations/README.md`](session-03-db-transactions-migrations/README.md) for setup instructions.
 
 
+### Session 04 — CSR, Shared Backend Package, Domain Workflow Refactor, and RBAC ([`session-04-shared-backend-domain-rbac/`](session-04-shared-backend-domain-rbac/))
+
+Take the Session 03 API forward with a focus on codebase separation, a reusable shared backend package, domain workflows, authentication/RBAC, and raw data normalization into relational models.
+
+See [`session-04-shared-backend-domain-rbac/README.md`](session-04-shared-backend-domain-rbac/README.md) for setup instructions.
+
+
 ## Pull request description format
 
 Every PR in this repository must use the following structure. This applies to every directory/project in this repo, not just the one it's introduced in.

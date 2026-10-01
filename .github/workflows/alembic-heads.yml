@@ -32,10 +32,6 @@ jobs:
       # Only the current session is checked; earlier sessions are frozen
       # snapshots and are not expected to change.
       - name: Check the current session has exactly one head
-        env:
-          # `alembic heads` only reads the version scripts, but give the
-          # settings a value in case env.py is ever imported.
-          DATABASE_URL: postgresql+asyncpg://user:pass@localhost:5432/db
         run: |
           if [ ! -f "$CURRENT_SESSION/alembic.ini" ]; then
             echo "::error title=Unknown session::$CURRENT_SESSION/alembic.ini not found. Update CURRENT_SESSION in .github/workflows/alembic-heads.yml."

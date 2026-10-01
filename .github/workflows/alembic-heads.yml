@@ -1,0 +1,53 @@
+name: Alembic heads
+
+on:
+  pull_request:
+    paths:
+      - "session-*/alembic/**"
+      - "session-*/pyproject.toml"
+      - "session-*/uv.lock"
+      - ".github/workflows/alembic-heads.yml"
+  push:
+    branches: [main]
+    paths:
+      - "session-*/alembic/**"
+
+permissions:
+  contents: read
+
+jobs:
+  check-heads:
+    name: Single Alembic head
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      # Every session directory that has migrations is checked, so a new
+      # session needs no change here.
+      - name: Check each session has exactly one head
+        env:
+          # `alembic heads` only reads the version scripts, but give the
+          # settings a value in case env.py is ever imported.
+          DATABASE_URL: postgresql+asyncpg://user:pass@localhost:5432/db
+        run: |
+          status=0
+          for ini in session-*/alembic.ini; do
+            [ -e "$ini" ] || continue
+            dir=$(dirname "$ini")
+            echo "::group::$dir"
+            (
+              cd "$dir"
+              uv sync --frozen --quiet
+              heads=$(uv run alembic heads | grep -c '(head)' || true)
+              echo "heads found: $heads"
+              uv run alembic heads
+              if [ "$heads" -ne 1 ]; then
+                echo "::error title=Divergent Alembic heads::$dir has $heads heads (expected 1). Linearize with 'alembic merge' or fix down_revision."
+                exit 1
+              fi
+            ) || status=1
+            echo "::endgroup::"
+          done
+          exit $status

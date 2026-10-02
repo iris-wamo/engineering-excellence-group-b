@@ -4,11 +4,13 @@ from taskflow_shared.errors.exceptions import (
     AppError,
     ConflictError,
     DomainError,
+    EmailAlreadyExistsError,
     ForbiddenError,
     NotFoundError,
     ProjectMembershipRequiredError,
     TransactionSimulationError,
     UnauthorizedError,
+    UserNotFoundError,
     ValidationAppError,
 )
 from taskflow_shared.errors.handlers import register_exception_handlers
@@ -22,6 +24,8 @@ __all__ = [
     "UnauthorizedError",
     "ForbiddenError",
     "DomainError",
+    "EmailAlreadyExistsError",
+    "UserNotFoundError",
     "ProjectMembershipRequiredError",
     "TransactionSimulationError",
     "ErrorDetail",

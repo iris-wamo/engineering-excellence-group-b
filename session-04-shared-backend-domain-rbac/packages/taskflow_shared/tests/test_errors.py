@@ -5,10 +5,14 @@ from fastapi.testclient import TestClient
 from taskflow_shared.errors import (
     ConflictError,
     DomainError,
+    EmailAlreadyExistsError,
     ErrorResponse,
     ForbiddenError,
     NotFoundError,
+    ProjectMembershipRequiredError,
+    TransactionSimulationError,
     UnauthorizedError,
+    UserNotFoundError,
     ValidationAppError,
     register_exception_handlers,
 )
@@ -33,6 +37,21 @@ def test_error_hierarchy_status_codes() -> None:
 
     assert DomainError("invalid state").status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
     assert DomainError("invalid state").code == "DOMAIN_ERROR"
+
+    assert EmailAlreadyExistsError().status_code == status.HTTP_409_CONFLICT
+    assert EmailAlreadyExistsError().code == "CONFLICT"
+
+    assert UserNotFoundError().status_code == status.HTTP_404_NOT_FOUND
+    assert UserNotFoundError().code == "NOT_FOUND"
+
+    membership_err = ProjectMembershipRequiredError(user_id=1, project_id=2)
+    assert membership_err.status_code == status.HTTP_400_BAD_REQUEST
+    assert membership_err.code == "PROJECT_MEMBERSHIP_REQUIRED"
+    assert membership_err.details[0]["field"] == "assignee_id"
+
+    tx_err = TransactionSimulationError("Simulated failure")
+    assert tx_err.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    assert tx_err.code == "SIMULATED_TRANSACTION_FAILURE"
 
 
 def test_exception_handlers_envelope() -> None:

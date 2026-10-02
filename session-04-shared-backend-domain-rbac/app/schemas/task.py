@@ -3,6 +3,7 @@
 from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from taskflow_shared.pagination import PaginatedResponse
 
 from app.models.enums import TaskPriority, TaskStatus
 
@@ -126,10 +127,5 @@ class TaskResponse(BaseModel):
     )
 
 
-class TaskListResponse(BaseModel):
+class TaskListResponse(PaginatedResponse[TaskResponse]):
     """Schema for paginated task list response."""
-
-    items: list[TaskResponse]
-    total: int
-    page: int
-    page_size: int

@@ -3,6 +3,7 @@
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from taskflow_shared.pagination import PaginatedResponse
 
 
 class ProjectCreate(BaseModel):
@@ -105,10 +106,5 @@ class ProjectResponse(BaseModel):
     )
 
 
-class ProjectListResponse(BaseModel):
+class ProjectListResponse(PaginatedResponse[ProjectResponse]):
     """Schema for a paginated project list response."""
-
-    items: list[ProjectResponse] = Field(description="The projects on this page")
-    total: int = Field(description="Total number of projects matching the query")
-    page: int = Field(description="Current page number (1-indexed)")
-    page_size: int = Field(description="Maximum number of projects per page")

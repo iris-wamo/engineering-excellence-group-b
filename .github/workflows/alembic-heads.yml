@@ -18,7 +18,7 @@ permissions:
 env:
   # UPDATE THIS when a new session is forked from the previous one
   # (see "Forking a new session" in the root README).
-  CURRENT_SESSION: session-03-db-transactions-migrations
+  CURRENT_SESSION: session-04-shared-backend-domain-rbac
 
 jobs:
   check-heads:

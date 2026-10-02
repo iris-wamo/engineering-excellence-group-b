@@ -34,6 +34,13 @@ Take the Session 02 API forward with a focus on database correctness, transactio
 See [`session-03-db-transactions-migrations/README.md`](session-03-db-transactions-migrations/README.md) for setup instructions.
 
 
+## Forking a new session
+
+Each session is a standalone copy of the previous one. When you fork `session-NN` into the next session directory:
+
+- Add the new session to the list above.
+- Update `CURRENT_SESSION` in [`.github/workflows/alembic-heads.yml`](.github/workflows/alembic-heads.yml) to the new directory name. The Alembic single-head check only runs against that one session; if it is not updated, the new session's migrations are not checked.
+
 ## Pull request description format
 
 Every PR in this repository must use the following structure. This applies to every directory/project in this repo, not just the one it's introduced in.

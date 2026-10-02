@@ -1,0 +1,48 @@
+name: Alembic heads
+
+on:
+  pull_request:
+    paths:
+      - "session-*/alembic/**"
+      - "session-*/pyproject.toml"
+      - "session-*/uv.lock"
+      - ".github/workflows/alembic-heads.yml"
+  push:
+    branches: [main]
+    paths:
+      - "session-*/alembic/**"
+
+permissions:
+  contents: read
+
+env:
+  # UPDATE THIS when a new session is forked from the previous one
+  # (see "Forking a new session" in the root README).
+  CURRENT_SESSION: session-03-db-transactions-migrations
+
+jobs:
+  check-heads:
+    name: Single Alembic head
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      # Only the current session is checked; earlier sessions are frozen
+      # snapshots and are not expected to change.
+      - name: Check the current session has exactly one head
+        run: |
+          if [ ! -f "$CURRENT_SESSION/alembic.ini" ]; then
+            echo "::error title=Unknown session::$CURRENT_SESSION/alembic.ini not found. Update CURRENT_SESSION in .github/workflows/alembic-heads.yml."
+            exit 1
+          fi
+          cd "$CURRENT_SESSION"
+          uv sync --frozen --quiet
+          heads=$(uv run alembic heads | grep -c '(head)' || true)
+          echo "heads found: $heads"
+          uv run alembic heads
+          if [ "$heads" -ne 1 ]; then
+            echo "::error title=Divergent Alembic heads::$CURRENT_SESSION has $heads heads (expected 1). Linearize with 'alembic merge' or fix down_revision."
+            exit 1
+          fi

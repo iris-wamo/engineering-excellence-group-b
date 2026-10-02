@@ -1,0 +1,68 @@
+name: PR description
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  check-body:
+    name: Check PR description format
+    # Bot PRs (e.g. Dependabot) use their own description format.
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.pull_request.body || "";
+
+            // Split the body into { heading -> text } on level-2 headings.
+            const sections = {};
+            let current = null;
+            for (const line of body.split(/\r?\n/)) {
+              const m = line.match(/^##\s+(.*?)\s*$/);
+              if (m) {
+                current = m[1].toLowerCase();
+                sections[current] = "";
+              } else if (current) {
+                sections[current] += line + "\n";
+              }
+            }
+
+            const required = ["summary", "why", "test plan"];
+            // "assumptions taken" is optional; the "(if any)" suffix is allowed.
+            const errors = [];
+
+            for (const name of required) {
+              if (!(name in sections)) {
+                errors.push(`Missing required section "## ${name.replace(/\b\w/g, c => c.toUpperCase())}".`);
+              } else if (!sections[name].trim()) {
+                errors.push(`Section "${name}" is empty.`);
+              }
+            }
+
+            const assumptionsKey = Object.keys(sections).find(k => k.startsWith("assumptions taken"));
+            if (assumptionsKey !== undefined && !sections[assumptionsKey].trim()) {
+              errors.push('Section "Assumptions Taken" is present but empty; fill it in or remove it.');
+            }
+
+            // Test plan items must be real, completed results, not TODO placeholders.
+            const plan = sections["test plan"] || "";
+            if (plan.trim()) {
+              if (/^\s*[-*]\s+\[ \]/m.test(plan)) {
+                errors.push("Test plan has unchecked items (`- [ ]`). List only commands you actually ran, as `- [x]`.");
+              }
+              if (!/^\s*[-*]\s+\[[xX]\]/m.test(plan)) {
+                errors.push("Test plan needs at least one checked item (`- [x] <command> — <real outcome>`).");
+              }
+            }
+
+            if (errors.length) {
+              core.setFailed(
+                "PR description does not follow the repo format:\n- " + errors.join("\n- ") +
+                "\n\nSee the 'Pull request description format' section of the root README."
+              );
+            }

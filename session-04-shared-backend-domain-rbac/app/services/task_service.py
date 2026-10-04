@@ -128,8 +128,12 @@ class TaskService:
         task_id: int,
         data: TaskStatusUpdate,
     ) -> TaskResponse:
+        from app.workflows.task_workflow import TaskWorkflow
+        
         task = await _get_task_or_404(db, task_id)
-        task.status = data.status
+        
+        TaskWorkflow.transition_status(db, task, data.status)
+        
         task = await TaskRepository.update(db, task)
         return TaskResponse.model_validate(task)
 

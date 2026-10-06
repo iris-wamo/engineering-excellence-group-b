@@ -1,23 +1,23 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Optional
-from app.models.task import Task
-from app.models.enums import TaskStatus
-from app.models.task_status_history import TaskStatusHistory
-from app.models.activity_log import ActivityLog
+
 from app.core.exceptions import AppError, status
+from app.models.activity_log import ActivityLog
+from app.models.enums import TaskStatus
+from app.models.task import Task
+from app.models.task_status_history import TaskStatusHistory
+
 
 class InvalidStatusTransitionError(AppError):
     code = "INVALID_STATUS_TRANSITION"
     status_code = status.HTTP_400_BAD_REQUEST
 
     def __init__(self, current_status: TaskStatus, new_status: TaskStatus) -> None:
+        move = f"{current_status.value} to {new_status.value}"
         super().__init__(
-            f"Cannot transition task from {current_status.value} to {new_status.value}",
-            details=[{
-                "field": "status",
-                "message": f"Invalid transition from {current_status.value} to {new_status.value}"
-            }]
+            f"Cannot transition task from {move}",
+            details=[{"field": "status", "message": f"Invalid transition from {move}"}],
         )
+
 
 class TaskWorkflow:
     ALLOWED_TRANSITIONS = {
@@ -35,17 +35,13 @@ class TaskWorkflow:
 
     @classmethod
     def transition_status(
-        cls,
-        db: AsyncSession,
-        task: Task,
-        new_status: TaskStatus,
-        changed_by_id: Optional[int] = None
+        cls, db: AsyncSession, task: Task, new_status: TaskStatus, changed_by_id: int | None = None
     ) -> None:
         cls.validate_transition(task.status, new_status)
 
         previous_status = task.status
         task.status = new_status
-        
+
         # Record status history
         history = TaskStatusHistory(
             task_id=task.id,
@@ -54,7 +50,7 @@ class TaskWorkflow:
             changed_by_id=changed_by_id,
         )
         db.add(history)
-        
+
         # Record activity log
         activity_log = ActivityLog(
             actor_id=changed_by_id,

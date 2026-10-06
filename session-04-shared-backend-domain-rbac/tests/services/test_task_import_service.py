@@ -96,6 +96,26 @@ async def test_import_raw_task_missing_title_fails(db_session: AsyncSession) -> 
     assert detail.error_details is not None
 
 
+async def test_import_raw_task_whitespace_title_falls_back_to_summary(
+    db_session: AsyncSession,
+) -> None:
+    project = await _create_test_project(db_session, name="Fallback Proj", slug="fallback-proj")
+    raw = {
+        "title": "   ",
+        "summary": "Recovered from Summary",
+        "project_id": project.id,
+        "priority": "high",
+    }
+
+    result = await TaskImportService.import_raw_task(db_session, raw)
+
+    assert result.status == "SUCCESS"
+    assert result.postgres_task_id is not None
+    task = await db_session.get(Task, result.postgres_task_id)
+    assert task is not None
+    assert task.title == "Recovered from Summary"
+
+
 async def test_import_raw_task_nonexistent_project_fails(db_session: AsyncSession) -> None:
     raw = {
         "title": "Task for Ghost Project",

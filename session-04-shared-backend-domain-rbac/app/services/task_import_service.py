@@ -45,10 +45,11 @@ class TaskImportService:
 
         try:
             # 1. Title / Summary extraction and validation
-            raw_title = raw_payload.get("title") or raw_payload.get("summary")
-            if not raw_title or not str(raw_title).strip():
+            title_val = str(raw_payload.get("title") or "").strip()
+            summary_val = str(raw_payload.get("summary") or "").strip()
+            title = title_val or summary_val
+            if not title:
                 raise ValueError("Missing 'title' or 'summary' in raw payload.")
-            title = str(raw_title).strip()
 
             # 2. Project ID validation
             raw_project_id = raw_payload.get("project_id")

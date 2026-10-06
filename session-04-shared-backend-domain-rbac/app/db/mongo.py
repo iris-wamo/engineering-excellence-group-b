@@ -17,6 +17,7 @@ def get_mongo_client() -> MongoClient[dict[str, Any]]:
         _mongo_client = MongoClient(
             str(settings.mongo_url),
             serverSelectionTimeoutMS=5000,
+            tz_aware=True,
         )
     return _mongo_client
 

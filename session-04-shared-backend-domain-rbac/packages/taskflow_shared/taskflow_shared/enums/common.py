@@ -17,3 +17,11 @@ class SortOrder(StrEnum):
 
     ASC = "asc"
     DESC = "desc"
+
+
+class ImportStatus(StrEnum):
+    """Lifecycle status designations for raw imports."""
+
+    PENDING = "PENDING"
+    SUCCESS = "SUCCESS"
+    FAILED = "FAILED"

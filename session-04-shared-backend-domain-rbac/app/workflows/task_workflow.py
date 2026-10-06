@@ -28,16 +28,21 @@ class TaskWorkflow:
     }
 
     @classmethod
+    def validate_transition(cls, current_status: TaskStatus, new_status: TaskStatus) -> None:
+        """Raise InvalidStatusTransitionError unless the move is allowed. Writes nothing."""
+        if new_status not in cls.ALLOWED_TRANSITIONS.get(current_status, set()):
+            raise InvalidStatusTransitionError(current_status, new_status)
+
+    @classmethod
     def transition_status(
-        cls, 
-        db: AsyncSession, 
-        task: Task, 
-        new_status: TaskStatus, 
+        cls,
+        db: AsyncSession,
+        task: Task,
+        new_status: TaskStatus,
         changed_by_id: Optional[int] = None
     ) -> None:
-        if new_status not in cls.ALLOWED_TRANSITIONS.get(task.status, set()):
-            raise InvalidStatusTransitionError(task.status, new_status)
-        
+        cls.validate_transition(task.status, new_status)
+
         previous_status = task.status
         task.status = new_status
         

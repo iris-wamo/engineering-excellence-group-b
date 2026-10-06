@@ -25,6 +25,7 @@ from app.schemas.task import (
     TaskResponse,
     TaskStatusUpdate,
 )
+from app.workflows.task_workflow import TaskWorkflow
 
 
 async def _get_project_or_404(db: AsyncSession, project_id: int) -> Project:
@@ -128,8 +129,6 @@ class TaskService:
         task_id: int,
         data: TaskStatusUpdate,
     ) -> TaskResponse:
-        from app.workflows.task_workflow import TaskWorkflow
-        
         task = await _get_task_or_404(db, task_id)
         
         TaskWorkflow.transition_status(db, task, data.status)
@@ -171,6 +170,7 @@ class TaskService:
             if assignee_changed:
                 task.assignee_id = data.assignee_id
             if status_changed and data.status is not None:
+                TaskWorkflow.validate_transition(previous_status, data.status)
                 task.status = data.status
 
             # 2. Assignment history record (only when assignee changed)

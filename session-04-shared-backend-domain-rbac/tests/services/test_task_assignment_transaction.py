@@ -293,7 +293,7 @@ async def test_assign_task_mid_transaction_failure_rolls_back_everything(
             data=TaskAssignRequest(
                 assignee_id=charlie_id,
                 assigned_by_id=creator_id,
-                status=TaskStatus.done,
+                status=TaskStatus.review,
                 simulate_failure=True,
             ),
         )

@@ -50,6 +50,42 @@ async def test_api_assign_task_success(client: AsyncClient, db_session: AsyncSes
     assert data["status"] == "in_progress"
 
 
+async def test_api_assign_task_rejects_invalid_status_transition(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    creator = await UserService.create_user(
+        db_session, UserCreate(name="Lead", email="lead2@example.com")
+    )
+    assignee = await UserService.create_user(
+        db_session, UserCreate(name="Engineer", email="engineer2@example.com")
+    )
+    project = await ProjectService.create_project(db_session, ProjectCreate(name="Billing"))
+    db_session.add_all(
+        [
+            ProjectUser(project_id=project.id, user_id=creator.id, role=ProjectRole.owner),
+            ProjectUser(project_id=project.id, user_id=assignee.id, role=ProjectRole.member),
+        ]
+    )
+    await db_session.commit()
+    task = await TaskService.create_task(
+        db_session, TaskCreate(title="Invoices", project_id=project.id)
+    )
+
+    # todo -> done is not allowed, even when requested through the assign endpoint
+    response = await client.post(
+        f"/api/v1/tasks/{task.id}/assign",
+        json={"assignee_id": assignee.id, "assigned_by_id": creator.id, "status": "done"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_STATUS_TRANSITION"
+
+    # Nothing was applied: the task is still unassigned and in todo
+    task_res = await client.get(f"/api/v1/tasks/{task.id}")
+    assert task_res.json()["status"] == "todo"
+    assert task_res.json()["assignee_id"] is None
+
+
 async def test_api_assign_task_failure_rollback(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:

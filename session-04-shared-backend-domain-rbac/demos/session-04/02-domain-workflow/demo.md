@@ -1,7 +1,7 @@
 # Demo 02 — Domain Workflow Engine
 
 ## Loom Video
-Paste Loom link here.
+https://www.loom.com/share/73c888c87f594657a97d5208f1377561
 
 ## Objective
 Prove that task status changes follow one workflow, enforced in one place:

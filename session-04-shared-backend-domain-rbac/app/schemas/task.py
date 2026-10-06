@@ -103,6 +103,7 @@ class TaskResponse(BaseModel):
     project_id: int
     assignee_id: int | None
     due_date: date | None
+    mongo_import_id: str | None = None
     created_at: datetime
     updated_at: datetime
 

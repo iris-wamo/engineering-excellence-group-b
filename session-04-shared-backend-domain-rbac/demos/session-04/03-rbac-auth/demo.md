@@ -1,7 +1,10 @@
 # Demo 03 — Authentication & RBAC
 
-> Scope note: this demo covers **authentication only** (signup, login, identifying the caller).
+> Part A covers **authentication** (who are you?). Part B covers **authorization / RBAC**
+> (what are you allowed to do?).
 
+## Loom Video
+Paste Loom link here. _(Not yet recorded.)_
 
 ## Objective
 Prove that the API can:
@@ -10,11 +13,18 @@ Prove that the API can:
 2. Exchange valid credentials for a JWT access token.
 3. Identify which user is making a request from that token.
 4. Reject missing, invalid, and expired credentials with one consistent 401 error.
+5. Allow or deny each write action based on the caller's **per-project role**, returning 403
+   when an authenticated user lacks permission, matching
+   [`docs/rbac-authorization-matrix.md`](../../../docs/rbac-authorization-matrix.md) exactly.
 
 ## Scenario
-A new user signs up, logs in, and calls a protected endpoint. We then repeat the same calls with
-bad credentials and with no credentials at all, to confirm the API fails closed and never leaks
-whether an email exists or what the stored password looks like.
+**Part A:** a new user signs up, logs in, and calls a protected endpoint. We then repeat the same
+calls with bad credentials and with no credentials at all, to confirm the API fails closed and
+never leaks whether an email exists or what the stored password looks like.
+
+**Part B:** three users — `admin`, `manager`, `member` — are given those roles in one project
+(`Payments`). Each then attempts all four restricted actions, so every allowed row *and* every
+denied row of the matrix is exercised against a real server.
 
 ## Commands / Steps Used
 
@@ -152,3 +162,83 @@ taskflow=# SELECT id, email, password_hash FROM "user" WHERE email='ada@example.
 ```
 
 `sup3r-secret` appears nowhere in the table.
+---
+
+# Part B — Authorization (RBAC)
+
+## Commands / Steps Used
+
+```bash
+make migrate     # adds 'admin' and 'manager' to the project_role enum
+make run
+```
+
+Roles must be granted directly in SQL, because granting the first `admin` needs a project and
+creating a project needs an `admin` (see "Known gap" in the matrix doc):
+
+```sql
+INSERT INTO project (name, slug) VALUES ('Payments', 'payments');
+INSERT INTO project_user (project_id, user_id, role) VALUES
+  (1, 1, 'admin'), (1, 2, 'manager'), (1, 3, 'member');
+```
+
+| # | Caller | Call | Expected |
+|---|--------|------|----------|
+| A1 | admin | `POST /projects` | 201 |
+| A2 | manager | `POST /projects` | 403 `FORBIDDEN` |
+| A3 | member | `POST /projects` | 403 `FORBIDDEN` |
+| A4 | anonymous | `POST /projects` | 401 `UNAUTHENTICATED` |
+| B1 | admin | `POST /users` | 201 |
+| B2 | manager | `POST /users` | 403 `FORBIDDEN` |
+| C1 | manager | `POST /tasks/1/assign` | 200 |
+| C2 | member | `POST /tasks/1/assign` | 403 `FORBIDDEN` |
+| D1 | member (assignee) | `PATCH /tasks/1/status` | 200 |
+| D2 | admin (not assignee) | `PATCH /tasks/1/status` | 403 `FORBIDDEN` |
+| D3 | anonymous | `PATCH /tasks/1/status` | 401 `UNAUTHENTICATED` |
+
+## Expected Behavior
+- 401 is returned *before* any role check, so an anonymous caller never reveals whether their
+  role would have been sufficient.
+- 403 is returned for an authenticated caller whose role does not grant the action.
+- Status updates are an **ownership** check, not a role check: even an admin is refused on a task
+  that is not theirs.
+- A role only applies inside the project it was granted in.
+
+## Actual Findings
+All eleven calls returned exactly what the matrix predicts. Captured from a live server:
+
+### Evidence of allowed actions
+
+```text
+A1  admin   POST /projects          -> 201
+B1  admin   POST /users             -> 201
+C1  manager POST /tasks/1/assign    -> 200
+D1  member  PATCH /tasks/1/status   -> 200
+    {"id":1,"title":"Stripe","status":"in_progress","project_id":1,"assignee_id":3, ...}
+```
+
+### Evidence of denied actions
+
+```text
+A2  manager POST /projects          -> 403
+    {"error":{"code":"FORBIDDEN",
+              "message":"You do not have permission to perform this action","details":[]}}
+
+A3  member  POST /projects          -> 403   (same body)
+B2  manager POST /users             -> 403   (same body)
+C2  member  POST /tasks/1/assign    -> 403   (same body)
+
+D2  admin   PATCH /tasks/1/status   -> 403
+    {"error":{"code":"FORBIDDEN",
+              "message":"You can only update the status of tasks assigned to you","details":[]}}
+```
+
+### Evidence that 401 precedes 403
+
+```text
+A4  anonymous POST /projects        -> 401
+    {"error":{"code":"UNAUTHENTICATED",
+              "message":"Missing or invalid authentication credentials","details":[]}}
+
+D3  anonymous PATCH /tasks/1/status -> 401   (same body)
+```

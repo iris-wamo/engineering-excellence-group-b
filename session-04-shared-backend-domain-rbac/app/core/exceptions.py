@@ -101,6 +101,16 @@ class NotAuthenticatedError(AuthenticationError):
         super().__init__("Missing or invalid authentication credentials")
 
 
+class ForbiddenError(AppError):
+    """Raised when an authenticated user's role does not allow the requested action."""
+
+    code = "FORBIDDEN"
+    status_code = status.HTTP_403_FORBIDDEN
+
+    def __init__(self, message: str = "You do not have permission to perform this action") -> None:
+        super().__init__(message)
+
+
 class ProjectMembershipRequiredError(AppError):
     """Raised when assigning a task to a user who is not a member of the project."""
 

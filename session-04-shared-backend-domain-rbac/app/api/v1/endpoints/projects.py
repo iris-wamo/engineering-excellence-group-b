@@ -5,6 +5,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Path, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.permissions import Permission, require_permission
 from app.db.session import get_db
 from app.models.project import Project
 from app.schemas import ProjectCreate, ProjectListResponse, ProjectResponse
@@ -13,11 +14,16 @@ from app.services.project_service import ProjectService
 router = APIRouter(prefix="/projects", tags=["projects"])
 
 
-@router.post("", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=ProjectResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission(Permission.project_create))],
+)
 async def create_project(
     project: ProjectCreate, db: Annotated[AsyncSession, Depends(get_db)]
 ) -> Project:
-    """Create a new project."""
+    """Create a new project. Requires the admin role."""
     return await ProjectService.create_project(db, project)
 
 

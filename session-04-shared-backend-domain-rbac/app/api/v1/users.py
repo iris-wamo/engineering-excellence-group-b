@@ -5,6 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.permissions import Permission, require_permission
 from app.db.session import get_db
 from app.schemas.user import UserCreate, UserListResponse, UserResponse
 from app.services.user_service import UserService
@@ -12,13 +13,18 @@ from app.services.user_service import UserService
 router = APIRouter(prefix="/users", tags=["users"])
 
 
-@router.post("", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=UserResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission(Permission.user_manage))],
+)
 async def create_user(
     payload: UserCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
     response: Response,
 ) -> UserResponse:
-    """Create a new user."""
+    """Create a new user. Requires the admin role; self-registration uses /auth/signup."""
     user = await UserService.create_user(db, payload)
 
     response.headers["location"] = f"/api/v1/users/{user.id}"

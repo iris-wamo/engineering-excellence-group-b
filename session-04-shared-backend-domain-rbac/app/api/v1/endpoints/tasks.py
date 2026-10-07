@@ -5,6 +5,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.permissions import (
+    Permission,
+    require_task_assignee,
+    require_task_permission,
+)
 from app.db.session import get_db
 from app.models.enums import TaskPriority, TaskStatus
 from app.schemas.task import (
@@ -56,21 +61,29 @@ async def get_task(task_id: int, db: Annotated[AsyncSession, Depends(get_db)]) -
     return await TaskService.get_task(db, task_id)
 
 
-@router.patch("/{task_id}/status", response_model=TaskResponse)
+@router.patch(
+    "/{task_id}/status",
+    response_model=TaskResponse,
+    dependencies=[Depends(require_task_assignee)],
+)
 async def update_task_status(
     task_id: int,
     payload: TaskStatusUpdate,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> TaskResponse:
-    """Update the status of an existing task."""
+    """Update the status of an existing task. Only the task's assignee may do this."""
     return await TaskService.update_task_status(db, task_id, payload)
 
 
-@router.post("/{task_id}/assign", response_model=TaskResponse)
+@router.post(
+    "/{task_id}/assign",
+    response_model=TaskResponse,
+    dependencies=[Depends(require_task_permission(Permission.task_assign))],
+)
 async def assign_task(
     task_id: int,
     payload: TaskAssignRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> TaskResponse:
-    """Assign or reassign a task in a transaction-safe manner."""
+    """Assign or reassign a task. Requires admin, manager, or owner in the task's project."""
     return await TaskService.assign_task(db, task_id, payload)

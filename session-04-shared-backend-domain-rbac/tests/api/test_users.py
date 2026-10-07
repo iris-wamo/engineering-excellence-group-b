@@ -5,10 +5,13 @@ from app.schemas.user import UserCreate
 from app.services.user_service import UserService
 
 
-async def test_create_user_returns_201_and_payload(client: AsyncClient) -> None:
+async def test_create_user_returns_201_and_payload(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
     response = await client.post(
         "/api/v1/users",
         json={"name": "User", "email": "user@example.com"},
+        headers=admin_headers,
     )
 
     assert response.status_code == 201
@@ -19,20 +22,31 @@ async def test_create_user_returns_201_and_payload(client: AsyncClient) -> None:
     assert response.headers.get("location") == f"/api/v1/users/{body['id']}"
 
 
-async def test_create_user_rejects_invalid_email(client: AsyncClient) -> None:
+async def test_create_user_rejects_invalid_email(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
     response = await client.post(
         "/api/v1/users",
         json={"name": "User", "email": "not-an-email"},
+        headers=admin_headers,
     )
 
     assert response.status_code == 422
 
 
-async def test_create_user_returns_conflict_for_duplicate_email(client: AsyncClient) -> None:
-    await client.post("/api/v1/users", json={"name": "User", "email": "duplicate@example.com"})
+async def test_create_user_returns_conflict_for_duplicate_email(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    await client.post(
+        "/api/v1/users",
+        json={"name": "User", "email": "duplicate@example.com"},
+        headers=admin_headers,
+    )
 
     response = await client.post(
-        "/api/v1/users", json={"name": "User", "email": "duplicate@example.com"}
+        "/api/v1/users",
+        json={"name": "User", "email": "duplicate@example.com"},
+        headers=admin_headers,
     )
 
     assert response.status_code == 409
@@ -41,9 +55,13 @@ async def test_create_user_returns_conflict_for_duplicate_email(client: AsyncCli
     assert body["error"]["message"] == "Email already exists"
 
 
-async def test_get_user_returns_created_user_by_id(client: AsyncClient) -> None:
+async def test_get_user_returns_created_user_by_id(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
     response = await client.post(
-        "/api/v1/users", json={"name": "User", "email": "lookup@example.com"}
+        "/api/v1/users",
+        json={"name": "User", "email": "lookup@example.com"},
+        headers=admin_headers,
     )
     created = response.json()
 

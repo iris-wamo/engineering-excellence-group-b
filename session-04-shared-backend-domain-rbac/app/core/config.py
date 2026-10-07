@@ -11,5 +11,10 @@ class Settings(BaseSettings):
 
     database_url: PostgresDsn
 
+    # JWT access tokens. Override jwt_secret_key via the environment in production.
+    jwt_secret_key: str = "dev-only-secret-change-in-production"
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 15
+
 
 settings = Settings()

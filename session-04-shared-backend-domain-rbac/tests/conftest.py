@@ -53,6 +53,9 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
     await engine.dispose()
 
 
+AUTH_USER = {"name": "Auth User", "email": "auth-user@example.com", "password": "sup3r-secret"}
+
+
 @pytest.fixture()
 async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
     """Fixture that provides an AsyncClient with overridden database dependency"""
@@ -65,3 +68,14 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
     async with AsyncClient(transport=transport, base_url="http://test") as test_client:
         yield test_client
     app.dependency_overrides.clear()
+
+
+@pytest.fixture()
+async def auth_headers(client: AsyncClient) -> dict[str, str]:
+    """Signs up AUTH_USER, logs in, and returns the Authorization header for that user"""
+    await client.post("/api/v1/auth/signup", json=AUTH_USER)
+    response = await client.post(
+        "/api/v1/auth/login",
+        json={"email": AUTH_USER["email"], "password": AUTH_USER["password"]},
+    )
+    return {"Authorization": f"Bearer {response.json()['access_token']}"}

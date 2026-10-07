@@ -1,7 +1,7 @@
 """Add review status to TaskStatus enum
 
 Revision ID: ab1234567890
-Revises: 5c60a4a4906c
+Revises: f7715786b494
 Create Date: 2026-10-04 17:42:00.000000
 
 """

@@ -1,8 +1,7 @@
 # Demo 04 — Raw Data Normalization
 
 ## Loom Video
-<!-- Replace with Loom URL once recorded -->
-https://www.loom.com/share/placeholder-raw-normalization
+https://www.loom.com/share/cbd2a603e00a498bb010609a3bc3c47c
 
 ## Objective
 Demonstrate the **Store Raw First, Then Normalize** architectural pattern:

@@ -36,12 +36,12 @@ In a growing backend architecture, common cross-cutting capabilities (like error
 - `taskflow_shared` is recognized as an installed package.
 - `app.core.exceptions` cleanly re-exports and extends `taskflow_shared.errors`.
 - API endpoints automatically include `X-Request-ID` in HTTP responses.
-- All existing 69 app tests plus 6 package tests pass with 0 regressions.
+- All existing app tests plus package tests pass with 0 regressions.
 
 ## Actual Findings
 - `taskflow_shared==0.1.0` builds and installs via `uv` in < 2ms in editable mode.
-- 75 tests (69 app tests + 6 package tests) pass in ~3.3 seconds.
-- `mypy .` and `ruff check .` pass cleanly across all 82 files with 0 warnings or errors.
+- 82 tests (71 app tests + 11 package tests) pass cleanly.
+- `mypy .` and `ruff check .` pass cleanly across all source files with 0 warnings or errors.
 
 ## Evidence
 

@@ -22,15 +22,15 @@ The shared backend package provides foundational, cross-cutting infrastructure a
   - `ForbiddenError` (HTTP 403) — for RBAC permission checks (#71)
   - `DomainError` (HTTP 422) — for business workflow violations (#69)
 - **Response Schemas (ADR-001)**:
-  - `ErrorDetail(field, message)`
-  - `ErrorBody(code, message, details)`
+  - `ErrorDetail(field, message)`: Maps Pydantic error loc to dotted path (e.g. `items.0.name`) for nested payload error tracing.
+  - `ErrorBody(code, message, details)`: Canonical code (e.g. `VALIDATION_ERROR`, `NOT_FOUND`) with clear summary message (`"Request validation failed"` for 422).
   - `ErrorResponse(error: ErrorBody)`
 - **Exception Handlers**:
-  - `register_exception_handlers(app: FastAPI)`: Intercepts `AppError`, `RequestValidationError`, `HTTPException`, and unhandled `Exception`, ensuring all error payloads adhere strictly to the shared envelope.
+  - `register_exception_handlers(app: FastAPI)`: Intercepts `AppError`, `RequestValidationError`, `StarletteHTTPException` (catching both Starlette 404/405 routing errors and FastAPI `HTTPException`), and unhandled `Exception`, ensuring all error payloads adhere strictly to the shared envelope while preserving HTTP headers (e.g., `WWW-Authenticate`, `Allow`, `X-Request-ID`).
 
 ### 3. `pagination` (`taskflow_shared.pagination`)
 - **`PaginationParams`**: Reusable query parameter dependency (`page: int = 1`, `page_size: int = 20`, max 100) with automatic `.offset` and `.limit` properties.
-- **`PaginatedResponse[T]`**: Generic envelope holding `items: list[T]`, `total: int`, `page: int`, `page_size: int`, and `total_pages: int`.
+- **`PaginatedResponse[T]`**: Generic envelope holding `items: list[T]`, `total: int`, `page: int`, `page_size: int`, and dynamic `@computed_field` property `total_pages: int`.
 
 ### 4. `logging` (`taskflow_shared.logging`)
 - **`RequestIdMiddleware`**: ASGI middleware that preserves an incoming `X-Request-ID` or generates a unique UUID4, sets it in a `contextvars` variable, and propagates it in the response header.

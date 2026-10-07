@@ -1,21 +1,19 @@
 """Unit tests for taskflow_shared.errors."""
 
-from fastapi import FastAPI, status
+from fastapi import FastAPI, HTTPException, status
 from fastapi.testclient import TestClient
+from taskflow_shared.contracts.constants import HEADER_REQUEST_ID
 from taskflow_shared.errors import (
     ConflictError,
     DomainError,
-    EmailAlreadyExistsError,
     ErrorResponse,
     ForbiddenError,
     NotFoundError,
-    ProjectMembershipRequiredError,
-    TransactionSimulationError,
     UnauthorizedError,
-    UserNotFoundError,
     ValidationAppError,
     register_exception_handlers,
 )
+from taskflow_shared.logging import RequestIdMiddleware
 
 
 def test_error_hierarchy_status_codes() -> None:
@@ -26,7 +24,7 @@ def test_error_hierarchy_status_codes() -> None:
     assert ConflictError("conflict").status_code == status.HTTP_409_CONFLICT
     assert ConflictError("conflict").code == "CONFLICT"
 
-    assert ValidationAppError("validation").status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert ValidationAppError("validation").status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     assert ValidationAppError("validation").code == "VALIDATION_ERROR"
 
     assert UnauthorizedError("unauthorized").status_code == status.HTTP_401_UNAUTHORIZED
@@ -35,28 +33,14 @@ def test_error_hierarchy_status_codes() -> None:
     assert ForbiddenError("forbidden").status_code == status.HTTP_403_FORBIDDEN
     assert ForbiddenError("forbidden").code == "FORBIDDEN"
 
-    assert DomainError("invalid state").status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert DomainError("invalid state").status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     assert DomainError("invalid state").code == "DOMAIN_ERROR"
-
-    assert EmailAlreadyExistsError().status_code == status.HTTP_409_CONFLICT
-    assert EmailAlreadyExistsError().code == "CONFLICT"
-
-    assert UserNotFoundError().status_code == status.HTTP_404_NOT_FOUND
-    assert UserNotFoundError().code == "NOT_FOUND"
-
-    membership_err = ProjectMembershipRequiredError(user_id=1, project_id=2)
-    assert membership_err.status_code == status.HTTP_400_BAD_REQUEST
-    assert membership_err.code == "PROJECT_MEMBERSHIP_REQUIRED"
-    assert membership_err.details[0]["field"] == "assignee_id"
-
-    tx_err = TransactionSimulationError("Simulated failure")
-    assert tx_err.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
-    assert tx_err.code == "SIMULATED_TRANSACTION_FAILURE"
 
 
 def test_exception_handlers_envelope() -> None:
     """Verify registered FastAPI handlers format responses matching ErrorResponse schema."""
     app = FastAPI()
+    app.add_middleware(RequestIdMiddleware)
     register_exception_handlers(app)
 
     @app.get("/trigger-app-error")
@@ -70,9 +54,21 @@ def test_exception_handlers_envelope() -> None:
     def trigger_domain_error() -> None:
         raise DomainError("Cannot transition from done to todo")
 
-    client = TestClient(app)
+    @app.get("/trigger-auth-error")
+    def trigger_auth_error() -> None:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
-    # Test NotFoundError
+    @app.get("/trigger-crash")
+    def trigger_crash() -> None:
+        raise RuntimeError("Simulated crash")
+
+    client = TestClient(app, raise_server_exceptions=False)
+
+    # 1. Test NotFoundError
     res404 = client.get("/trigger-app-error")
     assert res404.status_code == 404
     data404 = res404.json()
@@ -81,10 +77,41 @@ def test_exception_handlers_envelope() -> None:
     assert validated404.error.message == "Project 42 not found"
     assert validated404.error.details[0].field == "project_id"
 
-    # Test DomainError
+    # 2. Test DomainError
     res422 = client.get("/trigger-domain-error")
     assert res422.status_code == 422
     data422 = res422.json()
     validated422 = ErrorResponse.model_validate(data422)
     assert validated422.error.code == "DOMAIN_ERROR"
     assert validated422.error.message == "Cannot transition from done to todo"
+
+    # 3. Test unknown route (Starlette 404 routing error) returns ADR-001 envelope
+    unknown_route_res = client.get("/does-not-exist")
+    assert unknown_route_res.status_code == 404
+    data_unknown = unknown_route_res.json()
+    validated_unknown = ErrorResponse.model_validate(data_unknown)
+    assert validated_unknown.error.code == "NOT_FOUND"
+    assert validated_unknown.error.message == "Not Found"
+
+    # 4. Test wrong method (Starlette 405 error) returns ADR-001 envelope and preserves Allow header
+    wrong_method_res = client.post("/trigger-app-error")
+    assert wrong_method_res.status_code == 405
+    data_wrong_method = wrong_method_res.json()
+    validated_wrong_method = ErrorResponse.model_validate(data_wrong_method)
+    assert validated_wrong_method.error.code == "METHOD_NOT_ALLOWED"
+    assert "Allow" in wrong_method_res.headers
+
+    # 5. Test 401 preserves WWW-Authenticate header
+    auth_res = client.get("/trigger-auth-error")
+    assert auth_res.status_code == 401
+    assert auth_res.headers.get("WWW-Authenticate") == "Bearer"
+    validated_auth = ErrorResponse.model_validate(auth_res.json())
+    assert validated_auth.error.code == "UNAUTHORIZED"
+
+    # 6. Test 500 unhandled exception returns ADR-001 envelope and includes X-Request-ID
+    crash_res = client.get("/trigger-crash")
+    assert crash_res.status_code == 500
+    assert HEADER_REQUEST_ID in crash_res.headers
+    data_crash = crash_res.json()
+    validated_crash = ErrorResponse.model_validate(data_crash)
+    assert validated_crash.error.code == "INTERNAL_SERVER_ERROR"

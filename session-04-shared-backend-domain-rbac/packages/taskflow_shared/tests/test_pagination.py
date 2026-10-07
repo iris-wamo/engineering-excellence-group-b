@@ -47,3 +47,26 @@ def test_paginated_response_create() -> None:
     )
     assert empty_res.total_pages == 0
     assert empty_res.total == 0
+
+
+def test_paginated_response_computed_field_immutability() -> None:
+    """Verify that PaginatedResponse computes total_pages and does not mutate input dict."""
+    items = [ItemModel(id=1, name="Item A")]
+    input_dict = {
+        "items": items,
+        "total": 45,
+        "page": 1,
+        "page_size": 20,
+    }
+    input_copy = dict(input_dict)
+
+    res = PaginatedResponse[ItemModel](**input_dict)
+    assert res.total_pages == 3
+
+    # Input dictionary must NOT be mutated
+    assert input_dict == input_copy
+    assert "total_pages" not in input_dict
+
+    # Serialized dump includes computed total_pages
+    dump = res.model_dump()
+    assert dump["total_pages"] == 3

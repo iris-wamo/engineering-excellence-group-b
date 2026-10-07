@@ -59,6 +59,8 @@ Tests: `uv run pytest tests/api/test_task_workflow.py tests/api/test_tasks_assig
 - Each valid move returns `200` with the new status.
 - The assign endpoint applies the same rule: `{"status": "done"}` on a `todo` task returns `400` and the task is left unchanged.
 - `task_status_history` and `activity_log` get one row per valid move.
+- Sending the status a task already has returns `200` and writes nothing (safe to retry).
+- Two concurrent changes to one task are applied one after the other; the second is validated against the first one's result.
 
 ## Actual Findings
 Run against the local API and Postgres on 2026-10-06:
@@ -119,5 +121,4 @@ Put the state machine in one workflow class and make every entry point call it. 
 
 ## Open Questions
 - Who made the change? `changed_by_id` and `actor_id` stay empty until the API knows the current user (planned with RBAC).
-- Should setting a task to the status it already has be a quiet no-op instead of a `400`?
 - Should reopening a finished task (`done → review`) be allowed for everyone, or only for certain roles?

@@ -1,8 +1,10 @@
 """API tests for the /tasks/{id}/assign endpoint."""
 
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.activity_log import ActivityLog
 from app.models.enums import ProjectRole
 from app.models.project_user import ProjectUser
 from app.schemas.project import ProjectCreate
@@ -48,6 +50,36 @@ async def test_api_assign_task_success(client: AsyncClient, db_session: AsyncSes
     assert data["id"] == task.id
     assert data["assignee_id"] == assignee.id
     assert data["status"] == "in_progress"
+
+
+async def test_api_assign_status_change_is_logged_as_status_changed(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    creator = await UserService.create_user(
+        db_session, UserCreate(name="Lead", email="lead3@example.com")
+    )
+    project = await ProjectService.create_project(db_session, ProjectCreate(name="Audit"))
+    db_session.add(ProjectUser(project_id=project.id, user_id=creator.id, role=ProjectRole.owner))
+    await db_session.commit()
+    task = await TaskService.create_task(
+        db_session, TaskCreate(title="Audited", project_id=project.id)
+    )
+
+    # Status-only change through the assign endpoint (assignee stays None)
+    response = await client.post(
+        f"/api/v1/tasks/{task.id}/assign",
+        json={"assignee_id": None, "assigned_by_id": creator.id, "status": "in_progress"},
+    )
+
+    assert response.status_code == 200
+    actions = (
+        await db_session.scalars(
+            select(ActivityLog.action)
+            .where(ActivityLog.entity_type == "task", ActivityLog.entity_id == task.id)
+            .order_by(ActivityLog.id)
+        )
+    ).all()
+    assert "STATUS_CHANGED" in actions
 
 
 async def test_api_assign_task_rejects_invalid_status_transition(

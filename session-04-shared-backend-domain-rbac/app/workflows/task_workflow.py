@@ -37,6 +37,11 @@ class TaskWorkflow:
     def transition_status(
         cls, db: AsyncSession, task: Task, new_status: TaskStatus, changed_by_id: int | None = None
     ) -> None:
+        if new_status == task.status:
+            # Same status requested again (e.g. a client retry): nothing to change, so
+            # write no history or activity rows. Matches assign_task, which also skips it.
+            return
+
         cls.validate_transition(task.status, new_status)
 
         previous_status = task.status

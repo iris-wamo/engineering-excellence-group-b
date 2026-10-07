@@ -2,6 +2,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import (
+    AppError,
     NotFoundError,
     ProjectMembershipRequiredError,
     TransactionSimulationError,
@@ -13,7 +14,6 @@ from app.models.project import Project
 from app.models.project_user import ProjectUser
 from app.models.task import Task
 from app.models.task_assignment_history import TaskAssignmentHistory
-from app.models.task_status_history import TaskStatusHistory
 from app.models.user import User
 from app.repositories.project_repository import ProjectRepository
 from app.repositories.task_repository import TaskRepository
@@ -48,8 +48,11 @@ async def _get_user_or_404(db: AsyncSession, user_id: int, field_name: str = "as
     return user
 
 
-async def _get_task_or_404(db: AsyncSession, task_id: int) -> Task:
-    task = await TaskRepository.get_by_id(db, task_id)
+async def _get_task_or_404(db: AsyncSession, task_id: int, *, for_update: bool = False) -> Task:
+    if for_update:
+        task = await TaskRepository.get_by_id_for_update(db, task_id)
+    else:
+        task = await TaskRepository.get_by_id(db, task_id)
     if task is None:
         raise NotFoundError(
             "Task not found",
@@ -129,9 +132,14 @@ class TaskService:
         task_id: int,
         data: TaskStatusUpdate,
     ) -> TaskResponse:
-        task = await _get_task_or_404(db, task_id)
+        # Lock the row so concurrent status changes are validated one after another.
+        task = await _get_task_or_404(db, task_id, for_update=True)
 
-        TaskWorkflow.transition_status(db, task, data.status)
+        try:
+            TaskWorkflow.transition_status(db, task, data.status)
+        except AppError:
+            await db.rollback()  # release the row lock
+            raise
 
         task = await TaskRepository.update(db, task)
         return TaskResponse.model_validate(task)
@@ -144,21 +152,28 @@ class TaskService:
     ) -> TaskResponse:
         """Assign or reassign a task with a single, transaction-safe atomic operation.
 
-        All 5 steps are staged before commit:
+        All steps are staged before commit:
         1. Task update (assignee_id, and status if requested)
         2. TaskAssignmentHistory (created only if assignee changes)
-        3. TaskStatusHistory (created only if status changes)
-        4. ActivityLog (audit log of assignment operation)
+        3. Status change via TaskWorkflow (only if status changes): validates the move and
+           writes a TaskStatusHistory row plus a STATUS_CHANGED ActivityLog
+        4. ActivityLog (TASK_ASSIGNED / TASK_UNASSIGNED audit log of the assignment)
         5. Notification (pending outbox notification for new assignee)
 
         If any error or simulated failure occurs, the entire transaction rolls back.
         """
-        task = await _get_task_or_404(db, task_id)
-        if data.assignee_id is not None:
-            await _get_user_or_404(db, data.assignee_id, "assignee_id")
-            await _verify_project_membership(db, data.assignee_id, task.project_id)
-        if data.assigned_by_id is not None:
-            await _get_user_or_404(db, data.assigned_by_id, "assigned_by_id")
+        # Lock the row so a concurrent status/assignee change cannot be validated against
+        # a stale read.
+        task = await _get_task_or_404(db, task_id, for_update=True)
+        try:
+            if data.assignee_id is not None:
+                await _get_user_or_404(db, data.assignee_id, "assignee_id")
+                await _verify_project_membership(db, data.assignee_id, task.project_id)
+            if data.assigned_by_id is not None:
+                await _get_user_or_404(db, data.assigned_by_id, "assigned_by_id")
+        except Exception:
+            await db.rollback()  # release the row lock
+            raise
 
         try:
             previous_assignee_id = task.assignee_id
@@ -170,8 +185,11 @@ class TaskService:
             if assignee_changed:
                 task.assignee_id = data.assignee_id
             if status_changed and data.status is not None:
-                TaskWorkflow.validate_transition(previous_status, data.status)
-                task.status = data.status
+                # Same rules and audit trail as PATCH /status: validates the move and writes
+                # the TaskStatusHistory row and a STATUS_CHANGED activity log.
+                TaskWorkflow.transition_status(
+                    db, task, data.status, changed_by_id=data.assigned_by_id
+                )
 
             # 2. Assignment history record (only when assignee changed)
             if assignee_changed:
@@ -183,17 +201,7 @@ class TaskService:
                 )
                 db.add(assignment_history)
 
-            # 3. Status history record (only when status changed)
-            if status_changed and data.status is not None:
-                status_history = TaskStatusHistory(
-                    task_id=task.id,
-                    previous_status=previous_status,
-                    new_status=data.status,
-                    changed_by_id=data.assigned_by_id,
-                )
-                db.add(status_history)
-
-            # 4. Activity log record
+            # 3. Activity log record for the assignment itself
             action_name = "TASK_ASSIGNED" if data.assignee_id is not None else "TASK_UNASSIGNED"
             activity_log = ActivityLog(
                 actor_id=data.assigned_by_id,

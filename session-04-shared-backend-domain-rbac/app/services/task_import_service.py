@@ -1,21 +1,29 @@
 """Service layer for raw task imports and normalization."""
 
-from datetime import UTC, date, datetime
+import logging
+from datetime import UTC, datetime
 from typing import Any
 
 from bson import ObjectId
-from pymongo.collection import Collection
+from pydantic import ValidationError
+from pymongo.asynchronous.collection import AsyncCollection
+from pymongo.errors import DuplicateKeyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from taskflow_shared.enums import ImportStatus
 
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import AppError, NotFoundError
 from app.db.mongo import get_raw_task_imports_collection
-from app.models.enums import TaskPriority, TaskStatus
 from app.models.task import Task
 from app.repositories.project_repository import ProjectRepository
 from app.repositories.user_repository import UserRepository
-from app.schemas.task_import import TaskImportDetailResponse, TaskImportResponse
-from app.services.task_service import _verify_project_membership
+from app.schemas.task_import import (
+    NormalizedTaskPayload,
+    TaskImportDetailResponse,
+    TaskImportResponse,
+)
+from app.services.task_service import verify_project_membership
+
+logger = logging.getLogger(__name__)
 
 
 class TaskImportService:
@@ -25,13 +33,47 @@ class TaskImportService:
     async def import_raw_task(
         db: AsyncSession,
         raw_payload: dict[str, Any],
-        collection: Collection[dict[str, Any]] | None = None,
+        collection: AsyncCollection[dict[str, Any]] | None = None,
+        idempotency_key: str | None = None,
     ) -> TaskImportResponse:
         """Store incoming raw task payload first in MongoDB, then normalize to PostgreSQL."""
         col = collection if collection is not None else get_raw_task_imports_collection()
 
+        # Determine effective idempotency key from argument or raw payload
+        raw_key = (
+            idempotency_key
+            or raw_payload.get("idempotency_key")
+            or raw_payload.get("jira_key")
+            or raw_payload.get("external_id")
+        )
+        effective_key = str(raw_key).strip() if raw_key is not None else None
+
+        # Check for existing import if idempotency key is provided
+        if effective_key:
+            existing = await col.find_one({"idempotency_key": effective_key})
+            if existing:
+                logger.info(
+                    "Idempotent import match found for key %s (mongo_id: %s)",
+                    effective_key,
+                    existing["_id"],
+                )
+                raw_status = str(existing.get("status", ImportStatus.PENDING.value))
+                try:
+                    status_enum = ImportStatus(raw_status)
+                except ValueError:
+                    status_enum = ImportStatus.FAILED
+
+                return TaskImportResponse(
+                    import_id=str(existing["_id"]),
+                    status=status_enum,
+                    postgres_task_id=existing.get("postgres_task_id"),
+                    error_details=existing.get("error_details"),
+                    created_at=existing.get("created_at", datetime.now(UTC)),
+                    updated_at=existing.get("updated_at", datetime.now(UTC)),
+                )
+
         now = datetime.now(UTC)
-        mongo_doc = {
+        mongo_doc: dict[str, Any] = {
             "raw_payload": raw_payload,
             "status": ImportStatus.PENDING.value,
             "postgres_task_id": None,
@@ -39,124 +81,113 @@ class TaskImportService:
             "created_at": now,
             "updated_at": now,
         }
-        insert_result = col.insert_one(mongo_doc)
-        mongo_id = insert_result.inserted_id
-        import_id_str = str(mongo_id)
+        if effective_key:
+            mongo_doc["idempotency_key"] = effective_key
 
         try:
-            # 1. Title / Summary extraction and validation
-            title_val = str(raw_payload.get("title") or "").strip()
-            summary_val = str(raw_payload.get("summary") or "").strip()
-            title = title_val or summary_val
-            if not title:
-                raise ValueError("Missing 'title' or 'summary' in raw payload.")
-
-            # 2. Project ID validation
-            raw_project_id = raw_payload.get("project_id")
-            if raw_project_id is None:
-                raise ValueError("Missing 'project_id' in raw payload.")
-            try:
-                project_id = int(raw_project_id)
-            except (ValueError, TypeError) as exc:
-                raise ValueError(f"Invalid 'project_id': {raw_project_id}") from exc
-
-            project = await ProjectRepository.get_by_id(db, project_id)
-            if project is None:
-                raise ValueError(f"Project {project_id} not found.")
-
-            # 3. Status extraction and validation
-            raw_status = raw_payload.get("status", "todo")
-            try:
-                status = (
-                    TaskStatus(raw_status)
-                    if isinstance(raw_status, TaskStatus)
-                    else TaskStatus(str(raw_status).lower())
-                )
-            except (ValueError, KeyError) as exc:
-                raise ValueError(f"Invalid status '{raw_status}'.") from exc
-
-            # 4. Priority extraction and validation
-            raw_priority = raw_payload.get("priority", "medium")
-            try:
-                priority = (
-                    TaskPriority(raw_priority)
-                    if isinstance(raw_priority, TaskPriority)
-                    else TaskPriority(str(raw_priority).lower())
-                )
-            except (ValueError, KeyError) as exc:
-                raise ValueError(f"Invalid priority '{raw_priority}'.") from exc
-
-            # 5. Optional due date parsing
-            due_date: date | None = None
-            raw_due_date = raw_payload.get("due_date")
-            if raw_due_date:
-                if isinstance(raw_due_date, date):
-                    due_date = raw_due_date
-                else:
-                    try:
-                        due_date = date.fromisoformat(str(raw_due_date).split("T")[0])
-                    except (ValueError, TypeError) as exc:
-                        raise ValueError(f"Invalid due_date format: {raw_due_date}") from exc
-
-            # 6. Optional Assignee validation and project membership verification
-            assignee_id: int | None = None
-            raw_assignee_id = raw_payload.get("assignee_id")
-            if raw_assignee_id is not None:
+            insert_result = await col.insert_one(mongo_doc)
+            mongo_id = insert_result.inserted_id
+        except DuplicateKeyError:
+            # Concurrent duplicate request with the same idempotency key
+            existing = await col.find_one({"idempotency_key": effective_key})
+            if existing:
+                raw_status = str(existing.get("status", ImportStatus.PENDING.value))
                 try:
-                    assignee_id = int(raw_assignee_id)
-                except (ValueError, TypeError) as exc:
-                    raise ValueError(f"Invalid 'assignee_id': {raw_assignee_id}") from exc
+                    status_enum = ImportStatus(raw_status)
+                except ValueError:
+                    status_enum = ImportStatus.FAILED
+                return TaskImportResponse(
+                    import_id=str(existing["_id"]),
+                    status=status_enum,
+                    postgres_task_id=existing.get("postgres_task_id"),
+                    error_details=existing.get("error_details"),
+                    created_at=existing.get("created_at", datetime.now(UTC)),
+                    updated_at=existing.get("updated_at", datetime.now(UTC)),
+                )
+            raise
 
-                assignee = await UserRepository.get_by_id(db, assignee_id)
+        import_id_str = str(mongo_id)
+
+        # Stage 1: Validation and PostgreSQL Transaction (Pre-commit)
+        try:
+            # 1. Fallback mapping: title or summary
+            raw_title = raw_payload.get("title")
+            raw_summary = raw_payload.get("summary")
+            effective_title = (
+                raw_title
+                if (isinstance(raw_title, str) and raw_title.strip())
+                else (raw_summary if isinstance(raw_summary, str) else "")
+            )
+
+            mapping_dict = {
+                "title": effective_title,
+                "description": raw_payload.get("description"),
+                "project_id": raw_payload.get("project_id"),
+                "assignee_id": raw_payload.get("assignee_id"),
+                "status": raw_payload.get("status", "todo"),
+                "priority": raw_payload.get("priority", "medium"),
+                "due_date": raw_payload.get("due_date"),
+            }
+
+            norm_payload = NormalizedTaskPayload.model_validate(mapping_dict)
+
+            # 2. Relational integrity validations
+            project = await ProjectRepository.get_by_id(db, norm_payload.project_id)
+            if project is None:
+                raise ValueError(f"Project {norm_payload.project_id} not found.")
+
+            if norm_payload.assignee_id is not None:
+                assignee = await UserRepository.get_by_id(db, norm_payload.assignee_id)
                 if assignee is None:
-                    raise ValueError(f"Assignee user {assignee_id} not found.")
-                await _verify_project_membership(db, assignee_id, project_id)
+                    raise ValueError(f"Assignee user {norm_payload.assignee_id} not found.")
+                await verify_project_membership(
+                    db, norm_payload.assignee_id, norm_payload.project_id
+                )
 
-            # 7. Normalize & Persist into PostgreSQL
+            # 3. Create relational task and commit
             task = Task(
-                title=title,
-                description=raw_payload.get("description"),
-                status=status,
-                priority=priority,
-                due_date=due_date,
-                project_id=project_id,
-                assignee_id=assignee_id,
+                title=norm_payload.title,
+                description=norm_payload.description,
+                status=norm_payload.status,
+                priority=norm_payload.priority,
+                due_date=norm_payload.due_date,
+                project_id=norm_payload.project_id,
+                assignee_id=norm_payload.assignee_id,
                 mongo_import_id=import_id_str,
             )
             db.add(task)
             await db.commit()
             await db.refresh(task)
-
-            # 8. Update MongoDB with SUCCESS status & PostgreSQL reference
-            updated_at = datetime.now(UTC)
-            col.update_one(
-                {"_id": mongo_id},
-                {
-                    "$set": {
-                        "status": ImportStatus.SUCCESS.value,
-                        "postgres_task_id": task.id,
-                        "updated_at": updated_at,
-                    }
-                },
-            )
-
-            return TaskImportResponse(
-                import_id=import_id_str,
-                status=ImportStatus.SUCCESS,
-                postgres_task_id=task.id,
-                error_details=None,
-                created_at=now,
-                updated_at=updated_at,
-            )
+            committed_task_id = task.id
 
         except Exception as exc:
             await db.rollback()
             updated_at = datetime.now(UTC)
-            error_details = {
-                "type": type(exc).__name__,
-                "message": str(exc),
-            }
-            col.update_one(
+
+            # Shield client from internal DB / infrastructure details
+            if isinstance(exc, (ValueError, AppError)):
+                error_details = {
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                }
+            elif isinstance(exc, ValidationError):
+                error_msgs = [f"{err['loc'][-1]}: {err['msg']}" for err in exc.errors()]
+                error_details = {
+                    "type": "ValidationError",
+                    "message": "; ".join(error_msgs),
+                }
+            else:
+                logger.exception(
+                    "Unexpected error during task import normalization for import %s: %s",
+                    import_id_str,
+                    exc,
+                )
+                error_details = {
+                    "type": "InternalNormalizationError",
+                    "message": "An internal error occurred during task normalization.",
+                }
+
+            await col.update_one(
                 {"_id": mongo_id},
                 {
                     "$set": {
@@ -176,11 +207,43 @@ class TaskImportService:
                 updated_at=updated_at,
             )
 
+        # Stage 2: Post-Commit Mongo Status Update
+        # The PostgreSQL commit succeeded; failures here must NOT mark the task FAILED.
+        updated_at = datetime.now(UTC)
+        try:
+            await col.update_one(
+                {"_id": mongo_id},
+                {
+                    "$set": {
+                        "status": ImportStatus.SUCCESS.value,
+                        "postgres_task_id": committed_task_id,
+                        "updated_at": updated_at,
+                    }
+                },
+            )
+        except Exception as mongo_exc:
+            logger.error(
+                "Post-commit Mongo update failed for import %s (task_id: %s): %s",
+                import_id_str,
+                committed_task_id,
+                mongo_exc,
+                exc_info=True,
+            )
+
+        return TaskImportResponse(
+            import_id=import_id_str,
+            status=ImportStatus.SUCCESS,
+            postgres_task_id=committed_task_id,
+            error_details=None,
+            created_at=now,
+            updated_at=updated_at,
+        )
+
     @staticmethod
     async def import_raw_tasks_batch(
         db: AsyncSession,
         items: list[dict[str, Any]],
-        collection: Collection[dict[str, Any]] | None = None,
+        collection: AsyncCollection[dict[str, Any]] | None = None,
     ) -> tuple[int, int, int, list[TaskImportResponse]]:
         """Ingest multiple raw task payloads into MongoDB and normalize independently."""
         results: list[TaskImportResponse] = []
@@ -202,9 +265,9 @@ class TaskImportService:
         return len(items), succeeded, failed, results
 
     @staticmethod
-    def get_import_by_id(
+    async def get_import_by_id(
         import_id: str,
-        collection: Collection[dict[str, Any]] | None = None,
+        collection: AsyncCollection[dict[str, Any]] | None = None,
     ) -> TaskImportDetailResponse:
         """Retrieve the raw task import record and current status from MongoDB."""
         col = collection if collection is not None else get_raw_task_imports_collection()
@@ -215,7 +278,7 @@ class TaskImportService:
                 details=[{"field": "import_id", "message": f"Invalid import ID: '{import_id}'"}],
             )
 
-        doc = col.find_one({"_id": ObjectId(import_id)})
+        doc = await col.find_one({"_id": ObjectId(import_id)})
         if not doc:
             raise NotFoundError(
                 "Import record not found",

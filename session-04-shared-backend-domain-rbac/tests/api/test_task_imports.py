@@ -1,18 +1,9 @@
 """Integration tests for raw task import API endpoints."""
 
-import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.mongo import get_raw_task_imports_collection
 from app.models.project import Project
-
-
-@pytest.fixture(autouse=True)
-def clean_mongo_imports() -> None:
-    """Ensure clean raw_task_imports collection before each test."""
-    col = get_raw_task_imports_collection()
-    col.delete_many({})
 
 
 async def _create_test_project(
@@ -65,7 +56,8 @@ async def test_api_import_raw_task_failure(client: AsyncClient) -> None:
     }
 
     response = await client.post("/api/v1/tasks/import", json=payload)
-    assert response.status_code == 200
+    # Returns 422 Unprocessable Entity when normalization fails, carrying import record
+    assert response.status_code == 422
 
     data = response.json()
     assert data["status"] == "FAILED"
@@ -80,6 +72,50 @@ async def test_api_import_raw_task_failure(client: AsyncClient) -> None:
     detail_data = detail_res.json()
     assert detail_data["status"] == "FAILED"
     assert detail_data["error_details"] is not None
+
+
+async def test_api_import_raw_task_idempotency_header(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    project = await _create_test_project(db_session, name="Idempotent Proj", slug="idempotent-proj")
+    payload = {
+        "raw_payload": {
+            "summary": "Deploy cluster",
+            "project_id": project.id,
+        }
+    }
+    headers = {"Idempotency-Key": "webhook-event-9999"}
+
+    # First call creates the task
+    res1 = await client.post("/api/v1/tasks/import", json=payload, headers=headers)
+    assert res1.status_code == 201
+    data1 = res1.json()
+
+    # Second call returns existing record without creating duplicate task
+    res2 = await client.post("/api/v1/tasks/import", json=payload, headers=headers)
+    assert res2.status_code == 201
+    data2 = res2.json()
+
+    assert data1["import_id"] == data2["import_id"]
+    assert data1["postgres_task_id"] == data2["postgres_task_id"]
+
+
+async def test_api_import_raw_task_rejects_overlong_title(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    project = await _create_test_project(db_session, name="Long Title Proj", slug="long-title-proj")
+    payload = {
+        "raw_payload": {
+            "summary": "X" * 105,
+            "project_id": project.id,
+        }
+    }
+
+    response = await client.post("/api/v1/tasks/import", json=payload)
+    assert response.status_code == 422
+    data = response.json()
+    assert data["status"] == "FAILED"
+    assert "100" in data["error_details"]["message"]
 
 
 async def test_api_get_raw_task_import_not_found(client: AsyncClient) -> None:

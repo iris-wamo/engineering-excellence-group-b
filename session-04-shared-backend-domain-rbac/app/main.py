@@ -6,7 +6,7 @@ from taskflow_shared.logging import RequestIdMiddleware, configure_logging
 
 from app.api.v1 import api_router
 from app.core.exceptions import register_exception_handlers
-from app.db.mongo import close_mongo_client
+from app.db.mongo import close_mongo_client, init_mongo_indexes
 
 configure_logging()
 
@@ -14,8 +14,9 @@ configure_logging()
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan context manager."""
+    await init_mongo_indexes()
     yield
-    close_mongo_client()
+    await close_mongo_client()
 
 
 app = FastAPI(title="session-04-shared-backend-domain-rbac", lifespan=lifespan)

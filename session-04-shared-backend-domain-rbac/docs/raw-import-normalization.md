@@ -116,6 +116,8 @@ To resolve this, TaskFlow implements the **Store Raw First, Then Normalize** arc
     }
   }
   ```
+- **Headers (Optional)**:
+  - `Idempotency-Key`: Client-provided deduplication key (e.g. webhook event ID).
 - **Success Response (`201 Created`)**:
   ```json
   {
@@ -127,7 +129,8 @@ To resolve this, TaskFlow implements the **Store Raw First, Then Normalize** arc
     "updated_at": "2026-10-06T11:00:01Z"
   }
   ```
-- **Failure Response (`200 OK`)**:
+- **Failure Response (`422 Unprocessable Entity`)**:
+  *(Payload is safely preserved in MongoDB for audit, but failed normalization constraints)*
   ```json
   {
     "import_id": "6701a2b3c4d5e6f7a8b9c0d2",

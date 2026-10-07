@@ -110,3 +110,38 @@ def test_task_batch_import_schemas() -> None:
     assert resp.total == 2
     assert resp.succeeded == 2
     assert resp.failed == 0
+
+
+def test_normalized_task_payload_validation() -> None:
+    from app.schemas.task_import import NormalizedTaskPayload
+
+    # Valid
+    payload = NormalizedTaskPayload(
+        title="  Refactor Authentication  ",
+        project_id=1,
+        priority="high",  # type: ignore[arg-type]
+        status="in_progress",  # type: ignore[arg-type]
+    )
+    assert payload.title == "Refactor Authentication"
+    assert payload.priority.value == "high"
+    assert payload.status.value == "in_progress"
+
+    # Overlong title rejected
+    with pytest.raises(ValidationError):
+        NormalizedTaskPayload(title="A" * 101, project_id=1)
+
+    # Blank title rejected
+    with pytest.raises(ValidationError):
+        NormalizedTaskPayload(title="   ", project_id=1)
+
+    # Boolean project_id rejected
+    with pytest.raises(ValidationError):
+        NormalizedTaskPayload(title="Valid", project_id=True)  # type: ignore[arg-type]
+
+    # Fractional project_id rejected
+    with pytest.raises(ValidationError):
+        NormalizedTaskPayload(title="Valid", project_id=1.5)  # type: ignore[arg-type]
+
+    # Non-string description rejected
+    with pytest.raises(ValidationError):
+        NormalizedTaskPayload(title="Valid", project_id=1, description={"foo": "bar"})  # type: ignore[arg-type]

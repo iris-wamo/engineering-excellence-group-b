@@ -57,7 +57,7 @@ async def _get_task_or_404(db: AsyncSession, task_id: int) -> Task:
     return task
 
 
-async def _verify_project_membership(db: AsyncSession, user_id: int, project_id: int) -> None:
+async def verify_project_membership(db: AsyncSession, user_id: int, project_id: int) -> None:
     has_members = await db.scalar(
         select(func.count()).select_from(ProjectUser).where(ProjectUser.project_id == project_id)
     )
@@ -70,6 +70,9 @@ async def _verify_project_membership(db: AsyncSession, user_id: int, project_id:
         )
         if membership is None:
             raise ProjectMembershipRequiredError(user_id=user_id, project_id=project_id)
+
+
+_verify_project_membership = verify_project_membership
 
 
 class TaskService:

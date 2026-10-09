@@ -1,6 +1,7 @@
+from fastapi import status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import AppError, status
+from app.core.exceptions import AppError
 from app.models.activity_log import ActivityLog
 from app.models.enums import TaskStatus
 from app.models.task import Task

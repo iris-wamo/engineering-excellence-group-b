@@ -193,7 +193,7 @@ async def main() -> None:
                 data=TaskAssignRequest(
                     assignee_id=charlie.id,
                     assigned_by_id=alice.id,
-                    status=TaskStatus.done,
+                    status=TaskStatus.review,
                     simulate_failure=True,
                 ),
             )

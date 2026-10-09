@@ -116,21 +116,24 @@ async def test_assign_task_success_all_records_created(
     assert status_history_records[0].new_status == TaskStatus.in_progress
     assert status_history_records[0].changed_by_id == assigned_by_id
 
-    # Verify ActivityLog row
+    # Verify ActivityLog rows: the status change goes through TaskWorkflow (STATUS_CHANGED)
+    # and the assignment itself is logged separately (TASK_ASSIGNED).
     activity_logs = (
         await db_session.scalars(
-            select(ActivityLog).where(
+            select(ActivityLog)
+            .where(
                 ActivityLog.entity_type == "task",
                 ActivityLog.entity_id == task_id,
             )
+            .order_by(ActivityLog.id)
         )
     ).all()
-    assert len(activity_logs) == 1
-    assert activity_logs[0].actor_id == assigned_by_id
-    assert activity_logs[0].action == "TASK_ASSIGNED"
-    assert activity_logs[0].details is not None
-    assert activity_logs[0].details["previous_assignee_id"] is None
-    assert activity_logs[0].details["new_assignee_id"] == assignee_id
+    assert [log.action for log in activity_logs] == ["STATUS_CHANGED", "TASK_ASSIGNED"]
+    assert all(log.actor_id == assigned_by_id for log in activity_logs)
+    assert activity_logs[0].details == {"previous_status": "todo", "new_status": "in_progress"}
+    assert activity_logs[1].details is not None
+    assert activity_logs[1].details["previous_assignee_id"] is None
+    assert activity_logs[1].details["new_assignee_id"] == assignee_id
 
     # Verify Notification row
     notifications = (
@@ -296,7 +299,7 @@ async def test_assign_task_mid_transaction_failure_rolls_back_everything(
             data=TaskAssignRequest(
                 assignee_id=charlie_id,
                 assigned_by_id=creator_id,
-                status=TaskStatus.done,
+                status=TaskStatus.review,
                 simulate_failure=True,
             ),
         )

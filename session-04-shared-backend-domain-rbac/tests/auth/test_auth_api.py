@@ -135,3 +135,51 @@ async def test_protected_endpoint_rejects_expired_token(client: AsyncClient) -> 
 
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "UNAUTHENTICATED"
+
+
+async def test_signup_rejects_multibyte_password_over_byte_limit(client: AsyncClient) -> None:
+    # 40 characters, but 80 bytes once UTF-8 encoded: under a character limit, over bcrypt's.
+    long_password = "é" * 40
+    assert len(long_password) == 40
+    assert len(long_password.encode()) == 80
+
+    response = await client.post(
+        "/api/v1/auth/signup",
+        json={"name": "Multibyte", "email": "multibyte@example.com", "password": long_password},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+async def test_login_with_password_over_byte_limit_returns_401(client: AsyncClient) -> None:
+    await client.post("/api/v1/auth/signup", json=SIGNUP)
+
+    response = await client.post(
+        "/api/v1/auth/login",
+        json={"email": SIGNUP["email"], "password": "a" * 100},
+    )
+
+    assert response.status_code == 401
+    body = response.json()
+    assert body["error"]["code"] == "UNAUTHENTICATED"
+    assert body["error"]["message"] == "Invalid email or password"
+
+
+async def test_login_as_inactive_user_returns_401(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    await client.post("/api/v1/auth/signup", json=SIGNUP)
+    user = (await db_session.scalars(select(User).where(User.email == SIGNUP["email"]))).one()
+    user.is_active = False
+    await db_session.commit()
+
+    response = await client.post(
+        "/api/v1/auth/login",
+        json={"email": SIGNUP["email"], "password": SIGNUP["password"]},
+    )
+
+    assert response.status_code == 401
+    body = response.json()
+    assert body["error"]["code"] == "UNAUTHENTICATED"
+    assert body["error"]["message"] == "Invalid email or password"

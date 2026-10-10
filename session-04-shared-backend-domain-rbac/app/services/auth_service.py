@@ -23,7 +23,9 @@ class AuthService:
         """Verify credentials and return a signed access token."""
         user = await UserRepository.get_by_email(db, str(payload.email))
 
-        if user is None or user.password_hash is None:
+        # An unknown email, an account with no password, and a deactivated account all
+        # raise the same error
+        if user is None or user.password_hash is None or not user.is_active:
             raise InvalidCredentialsError()
 
         if not verify_password(payload.password, user.password_hash):

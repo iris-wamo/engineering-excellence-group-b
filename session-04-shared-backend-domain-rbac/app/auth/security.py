@@ -16,8 +16,17 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(password: str, password_hash: str) -> bool:
-    """Return True when the plain-text password matches the stored hash."""
-    return bcrypt.checkpw(password.encode(), password_hash.encode())
+    """Return True when the plain-text password matches the stored hash.
+
+    An over-long password is treated as a mismatch rather than an error. bcrypt raises on
+    more than MAX_PASSWORD_BYTES, and signup rejects those, so such a password can never
+    match a hash we stored. Returning False keeps login's answer a uniform 401 instead of
+    a 500 that would reveal which emails have an account.
+    """
+    password_bytes = password.encode()
+    if len(password_bytes) > MAX_PASSWORD_BYTES:
+        return False
+    return bcrypt.checkpw(password_bytes, password_hash.encode())
 
 
 def create_access_token(user_id: int) -> str:

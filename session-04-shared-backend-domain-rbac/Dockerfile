@@ -15,6 +15,7 @@ FROM base AS builder
 COPY --from=ghcr.io/astral-sh/uv:0.11.32 /uv /uvx /bin/
 
 COPY pyproject.toml uv.lock ./
+COPY packages ./packages
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-install-project --no-dev
@@ -40,6 +41,7 @@ RUN groupadd --system app \
     && useradd --system --gid app app
 
 COPY --from=builder /app/.venv /app/.venv
+COPY --from=builder /app/packages ./packages
 COPY --from=builder /app/app ./app
 COPY --from=builder /app/alembic ./alembic
 COPY --from=builder /app/alembic.ini ./

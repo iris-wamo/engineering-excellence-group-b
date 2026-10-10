@@ -1,5 +1,7 @@
 """Tests for transaction-safe task assignment flow."""
 
+from typing import Any
+
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,7 +27,7 @@ from app.services.user_service import UserService
 
 
 @pytest.fixture
-async def sample_assignment_data(db_session: AsyncSession):
+async def sample_assignment_data(db_session: AsyncSession) -> dict[str, Any]:
     """Creates a sample project, task, and multiple users for testing."""
     user_creator = await UserService.create_user(
         db_session, UserCreate(name="Alice Lead", email="alice.lead@example.com")
@@ -126,6 +128,7 @@ async def test_assign_task_success_all_records_created(
     assert len(activity_logs) == 1
     assert activity_logs[0].actor_id == assigned_by_id
     assert activity_logs[0].action == "TASK_ASSIGNED"
+    assert activity_logs[0].details is not None
     assert activity_logs[0].details["previous_assignee_id"] is None
     assert activity_logs[0].details["new_assignee_id"] == assignee_id
 

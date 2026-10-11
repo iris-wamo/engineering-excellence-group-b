@@ -20,16 +20,33 @@ class TaskRepository:
             raise
 
     @staticmethod
-    async def get_by_id(db: AsyncSession, task_id: int) -> Task | None:
+    async def get_by_id(
+        db: AsyncSession, task_id: int, workspace_id: int | None = None
+    ) -> Task | None:
+        if workspace_id is not None:
+            result = await db.execute(
+                select(Task).where(Task.id == task_id, Task.workspace_id == workspace_id)
+            )
+            return result.scalar_one_or_none()
         return await db.get(Task, task_id)
 
     @staticmethod
-    async def get_by_id_for_update(db: AsyncSession, task_id: int) -> Task | None:
+    async def get_by_id_for_update(
+        db: AsyncSession, task_id: int, workspace_id: int | None = None
+    ) -> Task | None:
         """Load a task with a row lock (SELECT ... FOR UPDATE), refreshing any stale copy.
 
         Concurrent status changes on the same task wait here until the holder commits or
         rolls back, so each one validates against the latest committed status.
         """
+        if workspace_id is not None:
+            result = await db.execute(
+                select(Task)
+                .where(Task.id == task_id, Task.workspace_id == workspace_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            return result.scalar_one_or_none()
         return await db.get(Task, task_id, with_for_update=True, populate_existing=True)
 
     @staticmethod
@@ -52,8 +69,12 @@ class TaskRepository:
         priority: TaskPriority | None,
         project_id: int | None,
         assignee_id: int | None,
+        workspace_id: int | None = None,
     ) -> tuple[list[Task], int]:
         filters = []
+
+        if workspace_id is not None:
+            filters.append(Task.workspace_id == workspace_id)
 
         if status is not None:
             filters.append(Task.status == status)

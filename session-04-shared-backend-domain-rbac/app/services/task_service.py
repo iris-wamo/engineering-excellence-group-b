@@ -28,8 +28,10 @@ from app.schemas.task import (
 from app.workflows.task_workflow import TaskWorkflow
 
 
-async def _get_project_or_404(db: AsyncSession, project_id: int) -> Project:
-    project = await ProjectRepository.get_by_id(db, project_id)
+async def _get_project_or_404(
+    db: AsyncSession, project_id: int, workspace_id: int | None = None
+) -> Project:
+    project = await ProjectRepository.get_by_id(db, project_id, workspace_id=workspace_id)
     if project is None:
         raise NotFoundError(
             "Project not found",
@@ -48,11 +50,17 @@ async def _get_user_or_404(db: AsyncSession, user_id: int, field_name: str = "as
     return user
 
 
-async def _get_task_or_404(db: AsyncSession, task_id: int, *, for_update: bool = False) -> Task:
+async def _get_task_or_404(
+    db: AsyncSession,
+    task_id: int,
+    workspace_id: int | None = None,
+    *,
+    for_update: bool = False,
+) -> Task:
     if for_update:
-        task = await TaskRepository.get_by_id_for_update(db, task_id)
+        task = await TaskRepository.get_by_id_for_update(db, task_id, workspace_id=workspace_id)
     else:
-        task = await TaskRepository.get_by_id(db, task_id)
+        task = await TaskRepository.get_by_id(db, task_id, workspace_id=workspace_id)
     if task is None:
         raise NotFoundError(
             "Task not found",
@@ -81,8 +89,10 @@ _verify_project_membership = verify_project_membership
 
 class TaskService:
     @staticmethod
-    async def create_task(db: AsyncSession, data: TaskCreate) -> TaskResponse:
-        await _get_project_or_404(db, data.project_id)
+    async def create_task(
+        db: AsyncSession, data: TaskCreate, workspace_id: int = 1
+    ) -> TaskResponse:
+        project = await _get_project_or_404(db, data.project_id, workspace_id=workspace_id)
         if data.assignee_id is not None:
             await _get_user_or_404(db, data.assignee_id, "assignee_id")
 
@@ -94,6 +104,7 @@ class TaskService:
             priority=data.priority,
             due_date=data.due_date,
             status=TaskStatus.todo,
+            workspace_id=project.workspace_id,
         )
         task = await TaskRepository.create(db, task)
         return TaskResponse.model_validate(task)
@@ -107,6 +118,7 @@ class TaskService:
         priority: TaskPriority | None = None,
         project_id: int | None = None,
         assignee_id: int | None = None,
+        workspace_id: int | None = None,
     ) -> TaskListResponse:
         tasks, total = await TaskRepository.get_all(
             db,
@@ -116,6 +128,7 @@ class TaskService:
             priority=priority,
             project_id=project_id,
             assignee_id=assignee_id,
+            workspace_id=workspace_id,
         )
         return TaskListResponse(
             items=[TaskResponse.model_validate(task) for task in tasks],
@@ -125,8 +138,10 @@ class TaskService:
         )
 
     @staticmethod
-    async def get_task(db: AsyncSession, task_id: int) -> TaskResponse:
-        task = await _get_task_or_404(db, task_id)
+    async def get_task(
+        db: AsyncSession, task_id: int, workspace_id: int | None = None
+    ) -> TaskResponse:
+        task = await _get_task_or_404(db, task_id, workspace_id=workspace_id)
         return TaskResponse.model_validate(task)
 
     @staticmethod
@@ -134,9 +149,10 @@ class TaskService:
         db: AsyncSession,
         task_id: int,
         data: TaskStatusUpdate,
+        workspace_id: int | None = None,
     ) -> TaskResponse:
         # Lock the row so concurrent status changes are validated one after another.
-        task = await _get_task_or_404(db, task_id, for_update=True)
+        task = await _get_task_or_404(db, task_id, workspace_id=workspace_id, for_update=True)
 
         try:
             TaskWorkflow.transition_status(db, task, data.status)
@@ -152,31 +168,15 @@ class TaskService:
         db: AsyncSession,
         task_id: int,
         data: TaskAssignRequest,
+        workspace_id: int | None = None,
     ) -> TaskResponse:
-        """Assign or reassign a task with a single, transaction-safe atomic operation.
-
-        All steps are staged before commit:
-        1. Task update (assignee_id, and status if requested)
-        2. TaskAssignmentHistory (created only if assignee changes)
-        3. Status change via TaskWorkflow (only if status changes): validates the move and
-           writes a TaskStatusHistory row plus a STATUS_CHANGED ActivityLog
-        4. ActivityLog (TASK_ASSIGNED / TASK_UNASSIGNED audit log of the assignment)
-        5. Notification (pending outbox notification for new assignee)
-
-        If any error or simulated failure occurs, the entire transaction rolls back.
-        """
-        # Lock the row so a concurrent status/assignee change cannot be validated against
-        # a stale read.
-        task = await _get_task_or_404(db, task_id, for_update=True)
-        try:
-            if data.assignee_id is not None:
-                await _get_user_or_404(db, data.assignee_id, "assignee_id")
-                await _verify_project_membership(db, data.assignee_id, task.project_id)
-            if data.assigned_by_id is not None:
-                await _get_user_or_404(db, data.assigned_by_id, "assigned_by_id")
-        except Exception:
-            await db.rollback()  # release the row lock
-            raise
+        """Assign or reassign a task with a single, transaction-safe atomic operation."""
+        task = await _get_task_or_404(db, task_id, workspace_id=workspace_id, for_update=True)
+        if data.assignee_id is not None:
+            await _get_user_or_404(db, data.assignee_id, "assignee_id")
+            await _verify_project_membership(db, data.assignee_id, task.project_id)
+        if data.assigned_by_id is not None:
+            await _get_user_or_404(db, data.assigned_by_id, "assigned_by_id")
 
         try:
             previous_assignee_id = task.assignee_id
@@ -184,15 +184,15 @@ class TaskService:
             assignee_changed = data.assignee_id != previous_assignee_id
             status_changed = data.status is not None and data.status != previous_status
 
-            # 1. Update task fields in session
-            if assignee_changed:
-                task.assignee_id = data.assignee_id
+            # If status changes, validate transition via TaskWorkflow
             if status_changed and data.status is not None:
-                # Same rules and audit trail as PATCH /status: validates the move and writes
-                # the TaskStatusHistory row and a STATUS_CHANGED activity log.
                 TaskWorkflow.transition_status(
                     db, task, data.status, changed_by_id=data.assigned_by_id
                 )
+
+            # 1. Update task fields in session
+            if assignee_changed:
+                task.assignee_id = data.assignee_id
 
             # 2. Assignment history record (only when assignee changed)
             if assignee_changed:
@@ -204,7 +204,7 @@ class TaskService:
                 )
                 db.add(assignment_history)
 
-            # 3. Activity log record for the assignment itself
+            # 3. Activity log record
             action_name = "TASK_ASSIGNED" if data.assignee_id is not None else "TASK_UNASSIGNED"
             activity_log = ActivityLog(
                 actor_id=data.assigned_by_id,
@@ -222,7 +222,7 @@ class TaskService:
             )
             db.add(activity_log)
 
-            # 5. Notification record (pending outbox for new assignee)
+            # 4. Notification record (pending outbox for new assignee)
             if data.assignee_id is not None and assignee_changed:
                 notification = Notification(
                     recipient_id=data.assignee_id,
@@ -237,7 +237,7 @@ class TaskService:
                 )
                 db.add(notification)
 
-            # 6. Mid-transaction failure simulation (staged AFTER all writes)
+            # 5. Mid-transaction failure simulation (staged AFTER all writes)
             if data.simulate_failure:
                 raise TransactionSimulationError(
                     "Simulated failure midway through task assignment transaction"

@@ -11,6 +11,7 @@ from app.auth.permissions import (
     require_task_assignee,
     require_task_permission,
 )
+from app.auth.workspace_context import CurrentWorkspaceId
 from app.db.session import get_db
 from app.models.enums import TaskPriority, TaskStatus
 from app.schemas.task import (
@@ -37,9 +38,10 @@ router = APIRouter(prefix="/tasks", tags=["tasks"])
 async def create_task(
     payload: TaskCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
+    workspace_id: CurrentWorkspaceId,
 ) -> TaskResponse:
-    """Create a new task."""
-    return await TaskService.create_task(db, payload)
+    """Create a new task within the active workspace."""
+    return await TaskService.create_task(db, payload, workspace_id=workspace_id)
 
 
 @router.post(
@@ -102,6 +104,7 @@ async def get_raw_task_import(import_id: str) -> TaskImportDetailResponse:
 @router.get("", response_model=TaskListResponse)
 async def list_tasks(
     db: Annotated[AsyncSession, Depends(get_db)],
+    workspace_id: CurrentWorkspaceId,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=10, ge=1, le=100),
     status: TaskStatus | None = None,
@@ -109,7 +112,7 @@ async def list_tasks(
     project_id: int | None = None,
     assignee_id: int | None = None,
 ) -> TaskListResponse:
-    """List tasks, paginated and optionally filtered."""
+    """List tasks, paginated and optionally filtered within the active workspace."""
     return await TaskService.list_tasks(
         db,
         page=page,
@@ -118,13 +121,18 @@ async def list_tasks(
         priority=priority,
         project_id=project_id,
         assignee_id=assignee_id,
+        workspace_id=workspace_id,
     )
 
 
 @router.get("/{task_id}", response_model=TaskResponse)
-async def get_task(task_id: int, db: Annotated[AsyncSession, Depends(get_db)]) -> TaskResponse:
-    """Retrieve a task by ID."""
-    return await TaskService.get_task(db, task_id)
+async def get_task(
+    task_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    workspace_id: CurrentWorkspaceId,
+) -> TaskResponse:
+    """Retrieve a task by ID within the active workspace."""
+    return await TaskService.get_task(db, task_id, workspace_id=workspace_id)
 
 
 @router.patch(
@@ -136,9 +144,10 @@ async def update_task_status(
     task_id: int,
     payload: TaskStatusUpdate,
     db: Annotated[AsyncSession, Depends(get_db)],
+    workspace_id: CurrentWorkspaceId,
 ) -> TaskResponse:
     """Update the status of an existing task. Only the task's assignee may do this."""
-    return await TaskService.update_task_status(db, task_id, payload)
+    return await TaskService.update_task_status(db, task_id, payload, workspace_id=workspace_id)
 
 
 @router.post(
@@ -150,6 +159,7 @@ async def assign_task(
     task_id: int,
     payload: TaskAssignRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
+    workspace_id: CurrentWorkspaceId,
 ) -> TaskResponse:
     """Assign or reassign a task. Requires admin, manager, or owner in the task's project."""
-    return await TaskService.assign_task(db, task_id, payload)
+    return await TaskService.assign_task(db, task_id, payload, workspace_id=workspace_id)

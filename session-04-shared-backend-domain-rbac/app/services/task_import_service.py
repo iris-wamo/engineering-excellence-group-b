@@ -154,6 +154,7 @@ class TaskImportService:
                 project_id=norm_payload.project_id,
                 assignee_id=norm_payload.assignee_id,
                 mongo_import_id=import_id_str,
+                workspace_id=project.workspace_id,
             )
             db.add(task)
             await db.commit()

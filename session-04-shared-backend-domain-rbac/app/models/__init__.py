@@ -13,6 +13,8 @@ from app.models.task import Task
 from app.models.task_assignment_history import TaskAssignmentHistory
 from app.models.task_status_history import TaskStatusHistory
 from app.models.user import User
+from app.models.workspace import Workspace
+from app.models.workspace_user import WorkspaceUser
 
 __all__ = [
     "ActivityLog",
@@ -26,4 +28,6 @@ __all__ = [
     "TaskStatus",
     "TaskStatusHistory",
     "User",
+    "Workspace",
+    "WorkspaceUser",
 ]

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Path, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.permissions import Permission, require_permission
+from app.auth.workspace_context import CurrentWorkspaceId
 from app.db.session import get_db
 from app.models.project import Project
 from app.schemas import ProjectCreate, ProjectListResponse, ProjectResponse
@@ -21,15 +22,18 @@ router = APIRouter(prefix="/projects", tags=["projects"])
     dependencies=[Depends(require_permission(Permission.project_create))],
 )
 async def create_project(
-    project: ProjectCreate, db: Annotated[AsyncSession, Depends(get_db)]
+    project: ProjectCreate,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    workspace_id: CurrentWorkspaceId,
 ) -> Project:
     """Create a new project. Requires the admin role."""
-    return await ProjectService.create_project(db, project)
+    return await ProjectService.create_project(db, project, workspace_id=workspace_id)
 
 
 @router.get("", response_model=ProjectListResponse)
 async def list_projects(
     db: Annotated[AsyncSession, Depends(get_db)],
+    workspace_id: CurrentWorkspaceId,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=10, ge=1, le=100),
     search: str | None = Query(default=None),
@@ -44,6 +48,7 @@ async def list_projects(
         search=search,
         sort_by=sort_by,
         sort_order=sort_order,
+        workspace_id=workspace_id,
     )
     return ProjectListResponse(
         items=[ProjectResponse.model_validate(project) for project in projects],
@@ -55,7 +60,9 @@ async def list_projects(
 
 @router.get("/{project_id}", response_model=ProjectResponse)
 async def get_project(
-    db: Annotated[AsyncSession, Depends(get_db)], project_id: int = Path(gt=0)
+    db: Annotated[AsyncSession, Depends(get_db)],
+    workspace_id: CurrentWorkspaceId,
+    project_id: int = Path(gt=0),
 ) -> Project:
     """Retrieve a project by ID."""
-    return await ProjectService.get_project(db, project_id)
+    return await ProjectService.get_project(db, project_id, workspace_id=workspace_id)

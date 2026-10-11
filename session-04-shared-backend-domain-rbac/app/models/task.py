@@ -12,6 +12,7 @@ from app.models.enums import TaskPriority, TaskStatus
 if TYPE_CHECKING:
     from app.models.project import Project
     from app.models.user import User
+    from app.models.workspace import Workspace
 
 
 class Task(Base, TimestampMixin):
@@ -26,6 +27,7 @@ class Task(Base, TimestampMixin):
             "priority",
             desc("id"),
         ),
+        Index("ix_task_workspace_id", "workspace_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -45,6 +47,13 @@ class Task(Base, TimestampMixin):
 
     due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
 
+    workspace_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("workspace.id", ondelete="CASCADE"),
+        nullable=False,
+        server_default="1",
+        default=1,
+    )
     project_id: Mapped[int] = mapped_column(
         ForeignKey("project.id", ondelete="CASCADE"), nullable=False
     )
@@ -53,5 +62,6 @@ class Task(Base, TimestampMixin):
     )
     mongo_import_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
+    workspace: Mapped["Workspace"] = relationship(back_populates="tasks")
     project: Mapped["Project"] = relationship(back_populates="tasks")
     assignee: Mapped["User | None"] = relationship(back_populates="tasks")

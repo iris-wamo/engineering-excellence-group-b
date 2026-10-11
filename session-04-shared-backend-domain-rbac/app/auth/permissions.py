@@ -11,6 +11,7 @@ from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import CurrentUser
+from app.auth.workspace_context import CurrentWorkspaceId
 from app.core.exceptions import ForbiddenError, NotFoundError
 from app.db.session import get_db
 from app.models.enums import ProjectRole
@@ -68,15 +69,16 @@ def require_permission(
 
 def require_task_permission(
     permission: Permission,
-) -> Callable[[int, User, AsyncSession], Coroutine[Any, Any, User]]:
+) -> Callable[..., Coroutine[Any, Any, User]]:
     """Build a dependency checking the user's role in the project the task belongs to."""
 
     async def dependency(
         task_id: int,
         current_user: CurrentUser,
+        workspace_id: CurrentWorkspaceId,
         db: Annotated[AsyncSession, Depends(get_db)],
     ) -> User:
-        task = await _get_task(db, task_id)
+        task = await _get_task(db, task_id, workspace_id=workspace_id)
         role = await MembershipRepository.get_role_in_project(
             db, user_id=current_user.id, project_id=task.project_id
         )
@@ -90,6 +92,7 @@ def require_task_permission(
 async def require_task_assignee(
     task_id: int,
     current_user: CurrentUser,
+    workspace_id: CurrentWorkspaceId,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> User:
     """Allow the request only if the task is assigned to the caller.
@@ -97,19 +100,19 @@ async def require_task_assignee(
     This is deliberately an ownership check, not a role check: every role may move their
     own task's status, and no role may move someone else's.
     """
-    task = await _get_task(db, task_id)
+    task = await _get_task(db, task_id, workspace_id=workspace_id)
     if task.assignee_id != current_user.id:
         raise ForbiddenError("You can only update the status of tasks assigned to you")
     return current_user
 
 
-async def _get_task(db: AsyncSession, task_id: int) -> Task:
+async def _get_task(db: AsyncSession, task_id: int, workspace_id: int | None = None) -> Task:
     """Load the task an authorization check is about.
 
     Raises the same NotFoundError the task service uses, so a missing task still
     answers 404 and authorization does not change existing behavior.
     """
-    task = await TaskRepository.get_by_id(db, task_id)
+    task = await TaskRepository.get_by_id(db, task_id, workspace_id=workspace_id)
     if task is None:
         raise NotFoundError(
             "Task not found",

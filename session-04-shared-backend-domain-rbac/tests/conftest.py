@@ -3,6 +3,7 @@ from typing import NamedTuple
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -30,6 +31,20 @@ async def setup_database() -> AsyncGenerator[None, None]:
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.drop_all)
         await connection.run_sync(Base.metadata.create_all)
+        await connection.execute(
+            text(
+                "INSERT INTO workspace (id, name, slug, description, created_at, updated_at) "
+                "VALUES (1, 'Default Workspace', 'default-workspace', "
+                "'System default workspace', NOW(), NOW()) "
+                "ON CONFLICT (id) DO NOTHING;"
+            )
+        )
+        await connection.execute(
+            text(
+                "SELECT setval(pg_get_serial_sequence('workspace', 'id'), "
+                "COALESCE((SELECT MAX(id) FROM workspace), 1));"
+            )
+        )
     yield
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.drop_all)
@@ -126,6 +141,9 @@ class AuthedUser(NamedTuple):
     headers: dict[str, str]
 
 
+MakeUser = Callable[..., Awaitable[AuthedUser]]
+
+
 @pytest.fixture()
 async def project(db_session: AsyncSession) -> Project:
     """A project for role memberships to hang off
@@ -133,7 +151,7 @@ async def project(db_session: AsyncSession) -> Project:
     Inserted directly rather than through POST /api/v1/projects, because that endpoint
     is admin-only and granting the admin role already needs a project to exist.
     """
-    project = Project(name="Fixture Project", slug="fixture-project")
+    project = Project(name="Fixture Project", slug="fixture-project", workspace_id=1)
     db_session.add(project)
     await db_session.commit()
     await db_session.refresh(project)

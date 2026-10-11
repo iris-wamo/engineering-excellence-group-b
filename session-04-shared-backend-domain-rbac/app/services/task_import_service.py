@@ -165,7 +165,7 @@ class TaskImportService:
             updated_at = datetime.now(UTC)
 
             # Shield client from internal DB / infrastructure details
-            if isinstance(exc, (ValueError, AppError)):
+            if isinstance(exc, ValueError | AppError):
                 error_details = {
                     "type": type(exc).__name__,
                     "message": str(exc),

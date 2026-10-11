@@ -17,9 +17,12 @@ from typing import Any
 from sqlalchemy import func, insert, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
+from app.auth.security import hash_password
 from app.core.config import settings
 from app.models import Project, ProjectUser, Task, User, Workspace, WorkspaceUser
 from app.models.enums import ProjectRole, TaskPriority, TaskStatus
+
+DEFAULT_PASSWORD_HASH = hash_password("password123")
 
 # Sample data generators
 FIRST_NAMES = [
@@ -150,6 +153,7 @@ def generate_users(count: int) -> list[dict[str, Any]]:
             {
                 "name": f"{fn} {ln}",
                 "email": f"{fn.lower()}.{ln.lower()}{i}@example.com",
+                "password_hash": DEFAULT_PASSWORD_HASH,
                 "is_active": True,
             }
         )

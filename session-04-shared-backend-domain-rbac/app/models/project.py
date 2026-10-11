@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 class Project(Base, TimestampMixin):
     __tablename__ = "project"
     __table_args__ = (
-        UniqueConstraint("slug", name="uq_project_slug"),
+        UniqueConstraint("workspace_id", "slug", name="uq_project_workspace_slug"),
         Index("ix_project_slug", "slug"),
         Index("ix_project_workspace_id", "workspace_id"),
     )

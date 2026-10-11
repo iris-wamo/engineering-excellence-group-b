@@ -383,3 +383,96 @@ async def test_backward_compatibility_default_workspace(
     assert res.status_code == 200
     names = [p["name"] for p in res.json()["items"]]
     assert "Acme Portal" in names
+
+
+@pytest.mark.asyncio
+async def test_admin_role_does_not_bleed_across_workspaces(
+    client: AsyncClient, workspace_setup: dict, db_session: AsyncSession
+) -> None:
+    """User 3 is a member in both WS 1 & WS 2, and an admin in a WS 1 project,
+    but holds NO admin role in WS 2. Attempting to create a project in WS 2 returns 403 Forbidden.
+    """
+    user3: AuthedUser = workspace_setup["user3"]
+    p1: Project = workspace_setup["p1"]
+    ws2: Workspace = workspace_setup["ws2"]
+
+    # Make user3 an admin in Project 1 (Workspace 1)
+    db_session.add(ProjectUser(project_id=p1.id, user_id=user3.id, role=ProjectRole.admin))
+    await db_session.commit()
+
+    # User 3 tries to create a project in Workspace 2 where they hold no admin role
+    res = await client.post(
+        "/api/v1/projects",
+        headers={**user3.headers, HEADER_WORKSPACE_ID: str(ws2.id)},
+        json={"name": "Unauthorized Project in WS2", "description": "Should fail"},
+    )
+    assert res.status_code == 403
+    assert res.json()["error"]["code"] == "FORBIDDEN"
+
+
+@pytest.mark.asyncio
+async def test_cross_workspace_raw_task_import_blocked(
+    client: AsyncClient, workspace_setup: dict
+) -> None:
+    """Importing a task with a project belonging to another workspace fails normalization."""
+    user1: AuthedUser = workspace_setup["user1"]
+    p2: Project = workspace_setup["p2"]
+    ws1: Workspace = workspace_setup["ws1"]
+
+    res = await client.post(
+        "/api/v1/tasks/import",
+        headers={**user1.headers, HEADER_WORKSPACE_ID: str(ws1.id)},
+        json={
+            "raw_payload": {
+                "summary": "Import into foreign project",
+                "project_id": p2.id,
+            }
+        },
+    )
+    assert res.status_code == 422
+    body = res.json()
+    assert body["status"] == "FAILED"
+    assert "not found" in body["error_details"]["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_same_slug_allowed_in_different_workspaces(
+    client: AsyncClient, workspace_setup: dict, db_session: AsyncSession
+) -> None:
+    """Projects in different workspaces can share the same slug without conflict."""
+    user1: AuthedUser = workspace_setup["user1"]
+    user2: AuthedUser = workspace_setup["user2"]
+    ws1: Workspace = workspace_setup["ws1"]
+    ws2: Workspace = workspace_setup["ws2"]
+
+    # Create project 'Alpha Ops' in Workspace 1
+    res1 = await client.post(
+        "/api/v1/projects",
+        headers={**user1.headers, HEADER_WORKSPACE_ID: str(ws1.id)},
+        json={"name": "Alpha Ops", "description": "WS1 Ops"},
+    )
+    assert res1.status_code == 201
+
+    # Create project 'Alpha Ops' in Workspace 2 (same slug 'alpha-ops')
+    res2 = await client.post(
+        "/api/v1/projects",
+        headers={**user2.headers, HEADER_WORKSPACE_ID: str(ws2.id)},
+        json={"name": "Alpha Ops", "description": "WS2 Ops"},
+    )
+    assert res2.status_code == 201
+
+    p_ws1 = await db_session.get(Project, res1.json()["id"])
+    p_ws2 = await db_session.get(Project, res2.json()["id"])
+    assert p_ws1 is not None and p_ws2 is not None
+    assert p_ws1.slug == p_ws2.slug == "alpha-ops"
+    assert p_ws1.workspace_id == ws1.id
+    assert p_ws2.workspace_id == ws2.id
+
+    # Duplicate in SAME workspace returns 409 Conflict
+    res3 = await client.post(
+        "/api/v1/projects",
+        headers={**user1.headers, HEADER_WORKSPACE_ID: str(ws1.id)},
+        json={"name": "Alpha Ops", "description": "Duplicate in WS1"},
+    )
+    assert res3.status_code == 409
+    assert res3.json()["error"]["code"] == "CONFLICT"

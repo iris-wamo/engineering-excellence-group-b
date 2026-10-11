@@ -1,8 +1,10 @@
 """Data access layer for the Project model."""
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import ConflictError
 from app.models.project import Project
 
 
@@ -22,6 +24,11 @@ class ProjectRepository:
             await db.commit()
             await db.refresh(project)
             return project
+        except IntegrityError as err:
+            await db.rollback()
+            raise ConflictError(
+                "A project with this name already exists in this workspace"
+            ) from err
         except Exception:
             await db.rollback()
             raise

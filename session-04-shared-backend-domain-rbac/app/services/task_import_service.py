@@ -35,6 +35,7 @@ class TaskImportService:
         raw_payload: dict[str, Any],
         collection: AsyncCollection[dict[str, Any]] | None = None,
         idempotency_key: str | None = None,
+        workspace_id: int = 1,
     ) -> TaskImportResponse:
         """Store incoming raw task payload first in MongoDB, then normalize to PostgreSQL."""
         col = collection if collection is not None else get_raw_task_imports_collection()
@@ -75,6 +76,7 @@ class TaskImportService:
         now = datetime.now(UTC)
         mongo_doc: dict[str, Any] = {
             "raw_payload": raw_payload,
+            "workspace_id": workspace_id,
             "status": ImportStatus.PENDING.value,
             "postgres_task_id": None,
             "error_details": None,
@@ -132,7 +134,9 @@ class TaskImportService:
             norm_payload = NormalizedTaskPayload.model_validate(mapping_dict)
 
             # 2. Relational integrity validations
-            project = await ProjectRepository.get_by_id(db, norm_payload.project_id)
+            project = await ProjectRepository.get_by_id(
+                db, norm_payload.project_id, workspace_id=workspace_id
+            )
             if project is None:
                 raise ValueError(f"Project {norm_payload.project_id} not found.")
 
@@ -245,6 +249,7 @@ class TaskImportService:
         db: AsyncSession,
         items: list[dict[str, Any]],
         collection: AsyncCollection[dict[str, Any]] | None = None,
+        workspace_id: int = 1,
     ) -> tuple[int, int, int, list[TaskImportResponse]]:
         """Ingest multiple raw task payloads into MongoDB and normalize independently."""
         results: list[TaskImportResponse] = []
@@ -256,6 +261,7 @@ class TaskImportService:
                 db=db,
                 raw_payload=raw_payload,
                 collection=collection,
+                workspace_id=workspace_id,
             )
             results.append(res)
             if res.status == ImportStatus.SUCCESS:
@@ -269,6 +275,7 @@ class TaskImportService:
     async def get_import_by_id(
         import_id: str,
         collection: AsyncCollection[dict[str, Any]] | None = None,
+        workspace_id: int | None = None,
     ) -> TaskImportDetailResponse:
         """Retrieve the raw task import record and current status from MongoDB."""
         col = collection if collection is not None else get_raw_task_imports_collection()
@@ -280,7 +287,11 @@ class TaskImportService:
             )
 
         doc = await col.find_one({"_id": ObjectId(import_id)})
-        if not doc:
+        if not doc or (
+            workspace_id is not None
+            and doc.get("workspace_id") is not None
+            and doc["workspace_id"] != workspace_id
+        ):
             raise NotFoundError(
                 "Import record not found",
                 details=[{"field": "import_id", "message": f"Import '{import_id}' not found"}],

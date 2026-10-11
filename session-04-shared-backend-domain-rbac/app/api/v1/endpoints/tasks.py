@@ -62,12 +62,13 @@ async def create_task(
 async def import_raw_task(
     payload: TaskRawImportRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
+    workspace_id: CurrentWorkspaceId,
     response: Response,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> TaskImportResponse:
     """Ingest raw task data into MongoDB first, then attempt normalization into PostgreSQL."""
     res = await TaskImportService.import_raw_task(
-        db, payload.raw_payload, idempotency_key=idempotency_key
+        db, payload.raw_payload, idempotency_key=idempotency_key, workspace_id=workspace_id
     )
     if res.status == ImportStatus.FAILED:
         response.status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
@@ -82,10 +83,11 @@ async def import_raw_task(
 async def import_raw_tasks_batch(
     payload: TaskBatchImportRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
+    workspace_id: CurrentWorkspaceId,
 ) -> TaskBatchImportResponse:
     """Ingest multiple raw task payloads in batch into MongoDB and normalize to PostgreSQL."""
     total, succeeded, failed, results = await TaskImportService.import_raw_tasks_batch(
-        db, [item.raw_payload for item in payload.items]
+        db, [item.raw_payload for item in payload.items], workspace_id=workspace_id
     )
     return TaskBatchImportResponse(
         total=total,
@@ -96,9 +98,12 @@ async def import_raw_tasks_batch(
 
 
 @router.get("/import/{import_id}", response_model=TaskImportDetailResponse)
-async def get_raw_task_import(import_id: str) -> TaskImportDetailResponse:
+async def get_raw_task_import(
+    import_id: str,
+    workspace_id: CurrentWorkspaceId,
+) -> TaskImportDetailResponse:
     """Retrieve raw task import details and current processing status from MongoDB."""
-    return await TaskImportService.get_import_by_id(import_id)
+    return await TaskImportService.get_import_by_id(import_id, workspace_id=workspace_id)
 
 
 @router.get("", response_model=TaskListResponse)

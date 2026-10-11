@@ -76,15 +76,19 @@ async def get_current_workspace_id(
 
         return workspace_id
 
-    # Fallback to default workspace 1 for backward compatibility
+    # Fallback to default workspace context when X-Workspace-ID is omitted
     if user is not None:
-        is_member = await WorkspaceRepository.is_user_in_workspace(
-            db, workspace_id=1, user_id=user.id
-        )
-        if not is_member:
+        user_workspaces = await WorkspaceRepository.get_user_workspaces(db, user.id)
+        if not user_workspaces:
             ws1 = await WorkspaceRepository.get_by_id(db, 1)
             if ws1 is not None:
                 await WorkspaceRepository.add_user_to_workspace(db, workspace_id=1, user_id=user.id)
+            return 1
+
+        if any(ws.id == 1 for ws in user_workspaces):
+            return 1
+
+        return user_workspaces[0].id
 
     return 1
 

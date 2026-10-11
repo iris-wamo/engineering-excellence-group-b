@@ -95,6 +95,7 @@ class TaskService:
         project = await _get_project_or_404(db, data.project_id, workspace_id=workspace_id)
         if data.assignee_id is not None:
             await _get_user_or_404(db, data.assignee_id, "assignee_id")
+            await _verify_project_membership(db, data.assignee_id, data.project_id)
 
         task = Task(
             title=data.title,

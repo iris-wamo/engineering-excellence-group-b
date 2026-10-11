@@ -12,11 +12,11 @@ from app.schemas.user import UserCreate
 
 class UserService:
     @staticmethod
-    async def create_user(db: AsyncSession, payload: UserCreate) -> User:
+    async def create_user(db: AsyncSession, payload: UserCreate, workspace_id: int = 1) -> User:
         user = await UserRepository.create(db, name=payload.name, email=str(payload.email))
-        ws = await db.get(Workspace, 1)
+        ws = await db.get(Workspace, workspace_id)
         if ws is not None:
-            db.add(WorkspaceUser(workspace_id=1, user_id=user.id))
+            db.add(WorkspaceUser(workspace_id=workspace_id, user_id=user.id))
             await db.commit()
             await db.refresh(user)
         return user

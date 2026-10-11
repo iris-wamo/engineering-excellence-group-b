@@ -41,7 +41,6 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("slug", name="uq_workspace_slug"),
     )
-    op.create_index("ix_workspace_slug", "workspace", ["slug"])
 
     # 2. Create workspace_user membership table
     op.create_table(
@@ -59,7 +58,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("workspace_id", "user_id"),
     )
 
-    # 3. Seed default workspace for existing data backward compatibility
+    # 3. Seed default workspace for existing data backward compatibility and sync sequence
     op.execute(
         """
         INSERT INTO workspace (id, name, slug, description, created_at, updated_at)
@@ -70,8 +69,14 @@ def upgrade() -> None:
         ON CONFLICT (id) DO NOTHING;
         """
     )
+    op.execute(
+        """
+        SELECT setval(pg_get_serial_sequence('workspace', 'id'),
+        COALESCE((SELECT MAX(id) FROM workspace), 1));
+        """
+    )
 
-    # 4. Add workspace_id to project and backfill
+    # 4. Add workspace_id to project, backfill, and scope slug uniqueness per workspace
     op.add_column("project", sa.Column("workspace_id", sa.Integer(), nullable=True))
     op.execute("UPDATE project SET workspace_id = 1 WHERE workspace_id IS NULL")
     op.alter_column("project", "workspace_id", nullable=False, server_default="1")
@@ -84,8 +89,10 @@ def upgrade() -> None:
         ondelete="CASCADE",
     )
     op.create_index("ix_project_workspace_id", "project", ["workspace_id"])
+    op.drop_constraint("uq_project_slug", "project", type_="unique")
+    op.create_unique_constraint("uq_project_workspace_slug", "project", ["workspace_id", "slug"])
 
-    # 5. Add workspace_id to task and backfill from parent project
+    # 5. Add workspace_id to task, backfill from parent project, and create composite index
     op.add_column("task", sa.Column("workspace_id", sa.Integer(), nullable=True))
     op.execute(
         """
@@ -106,6 +113,11 @@ def upgrade() -> None:
         ondelete="CASCADE",
     )
     op.create_index("ix_task_workspace_id", "task", ["workspace_id"])
+    op.create_index(
+        "ix_task_workspace_status_priority_id",
+        "task",
+        ["workspace_id", "status", "priority", sa.text("id DESC")],
+    )
 
     # 6. Backfill existing users into default workspace
     op.execute(
@@ -118,14 +130,16 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.drop_index("ix_task_workspace_status_priority_id", table_name="task")
     op.drop_index("ix_task_workspace_id", table_name="task")
     op.drop_constraint("fk_task_workspace_id", "task", type_="foreignkey")
     op.drop_column("task", "workspace_id")
 
+    op.drop_constraint("uq_project_workspace_slug", "project", type_="unique")
+    op.create_unique_constraint("uq_project_slug", "project", ["slug"])
     op.drop_index("ix_project_workspace_id", table_name="project")
     op.drop_constraint("fk_project_workspace_id", "project", type_="foreignkey")
     op.drop_column("project", "workspace_id")
 
     op.drop_table("workspace_user")
-    op.drop_index("ix_workspace_slug", table_name="workspace")
     op.drop_table("workspace")

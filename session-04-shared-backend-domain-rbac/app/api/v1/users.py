@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.permissions import Permission, require_permission
+from app.auth.workspace_context import CurrentWorkspaceId
 from app.db.session import get_db
 from app.schemas.user import UserCreate, UserListResponse, UserResponse
 from app.services.user_service import UserService
@@ -22,10 +23,11 @@ router = APIRouter(prefix="/users", tags=["users"])
 async def create_user(
     payload: UserCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
+    workspace_id: CurrentWorkspaceId,
     response: Response,
 ) -> UserResponse:
     """Create a new user. Requires the admin role; self-registration uses /auth/signup."""
-    user = await UserService.create_user(db, payload)
+    user = await UserService.create_user(db, payload, workspace_id=workspace_id)
 
     response.headers["location"] = f"/api/v1/users/{user.id}"
     return UserResponse.model_validate(user)

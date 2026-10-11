@@ -28,6 +28,13 @@ class Task(Base, TimestampMixin):
             desc("id"),
         ),
         Index("ix_task_workspace_id", "workspace_id"),
+        Index(
+            "ix_task_workspace_status_priority_id",
+            "workspace_id",
+            "status",
+            "priority",
+            desc("id"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

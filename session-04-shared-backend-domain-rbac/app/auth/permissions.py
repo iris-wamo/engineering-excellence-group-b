@@ -52,14 +52,19 @@ def role_allows(role: ProjectRole, permission: Permission) -> bool:
 
 def require_permission(
     permission: Permission,
-) -> Callable[[User, AsyncSession], Coroutine[Any, Any, User]]:
-    """Build a dependency allowing the request only if any of the user's roles grants it"""
+) -> Callable[..., Coroutine[Any, Any, User]]:
+    """Build a dependency allowing the request only if any of the user's roles
+    in the active workspace grants it.
+    """
 
     async def dependency(
         current_user: CurrentUser,
+        workspace_id: CurrentWorkspaceId,
         db: Annotated[AsyncSession, Depends(get_db)],
     ) -> User:
-        roles = await MembershipRepository.get_all_roles(db, user_id=current_user.id)
+        roles = await MembershipRepository.get_roles_in_workspace(
+            db, user_id=current_user.id, workspace_id=workspace_id
+        )
         if not any(role_allows(role, permission) for role in roles):
             raise ForbiddenError()
         return current_user

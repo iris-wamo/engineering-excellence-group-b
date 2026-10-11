@@ -28,3 +28,21 @@ class MembershipRepository:
             select(ProjectUser.role).where(ProjectUser.user_id == user_id).distinct()
         )
         return set(roles.all())
+
+    @staticmethod
+    async def get_roles_in_workspace(
+        db: AsyncSession, *, user_id: int, workspace_id: int
+    ) -> set[ProjectRole]:
+        """Return every distinct role the user holds in projects within the specified workspace."""
+        from app.models.project import Project
+
+        roles = await db.scalars(
+            select(ProjectUser.role)
+            .join(Project, ProjectUser.project_id == Project.id)
+            .where(
+                ProjectUser.user_id == user_id,
+                Project.workspace_id == workspace_id,
+            )
+            .distinct()
+        )
+        return set(roles.all())

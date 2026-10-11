@@ -24,6 +24,15 @@ class TaskRepository:
         return await db.get(Task, task_id)
 
     @staticmethod
+    async def get_by_id_for_update(db: AsyncSession, task_id: int) -> Task | None:
+        """Load a task with a row lock (SELECT ... FOR UPDATE), refreshing any stale copy.
+
+        Concurrent status changes on the same task wait here until the holder commits or
+        rolls back, so each one validates against the latest committed status.
+        """
+        return await db.get(Task, task_id, with_for_update=True, populate_existing=True)
+
+    @staticmethod
     async def update(db: AsyncSession, task: Task) -> Task:
         try:
             await db.commit()

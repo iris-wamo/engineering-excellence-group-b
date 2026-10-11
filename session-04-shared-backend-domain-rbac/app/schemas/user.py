@@ -1,6 +1,7 @@
 """Pydantic schemas for user request and response models."""
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from taskflow_shared.pagination import PaginatedResponse
 
 
 class UserCreate(BaseModel):
@@ -58,10 +59,5 @@ class UserResponse(BaseModel):
     )
 
 
-class UserListResponse(BaseModel):
+class UserListResponse(PaginatedResponse[UserResponse]):
     """Schema for a paginated user list response."""
-
-    items: list[UserResponse] = Field(description="The users on this page")
-    total: int = Field(description="Total number of users matching the query")
-    page: int = Field(description="Current page number (1-indexed)")
-    page_size: int = Field(description="Maximum number of users per page")

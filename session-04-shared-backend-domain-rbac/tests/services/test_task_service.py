@@ -45,10 +45,10 @@ async def test_update_task_status(db_session: AsyncSession) -> None:
     )
 
     updated = await TaskService.update_task_status(
-        db_session, created.id, TaskStatusUpdate(status=TaskStatus.done)
+        db_session, created.id, TaskStatusUpdate(status=TaskStatus.in_progress)
     )
 
-    assert updated.status == TaskStatus.done
+    assert updated.status == TaskStatus.in_progress
 
 
 async def test_create_task_raises_404_for_missing_project(db_session: AsyncSession) -> None:

@@ -7,6 +7,7 @@ Requires: docker compose up -d db mongo  (Postgres on 5433, Mongo on 27017)
 import asyncio
 import json
 from datetime import UTC, datetime
+from typing import Any
 
 from bson import ObjectId
 from pymongo import MongoClient
@@ -21,7 +22,7 @@ MONGO_URL = "mongodb://localhost:27017"
 MONGO_DB = "taskflow_imports"
 
 
-def mongo_collection():  # type: ignore[no-untyped-def]
+def mongo_collection() -> Any:
     return MongoClient(MONGO_URL)[MONGO_DB]["raw_task_imports"]
 
 
@@ -40,8 +41,8 @@ def pp(doc: dict) -> None:  # type: ignore[type-arg]
 
 async def try_import(
     db: AsyncSession,
-    col,  # type: ignore[no-untyped-def]
-    raw: dict,  # type: ignore[type-arg]
+    col: Any,
+    raw: dict[str, Any],
     label: str,
 ) -> None:
     """Store raw payload in Mongo, attempt Postgres insert, update Mongo status."""

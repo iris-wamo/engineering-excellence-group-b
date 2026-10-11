@@ -2,8 +2,9 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Header, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
+from taskflow_shared.enums import ImportStatus
 
 from app.auth.permissions import (
     Permission,
@@ -19,6 +20,14 @@ from app.schemas.task import (
     TaskResponse,
     TaskStatusUpdate,
 )
+from app.schemas.task_import import (
+    TaskBatchImportRequest,
+    TaskBatchImportResponse,
+    TaskImportDetailResponse,
+    TaskImportResponse,
+    TaskRawImportRequest,
+)
+from app.services.task_import_service import TaskImportService
 from app.services.task_service import TaskService
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -31,6 +40,63 @@ async def create_task(
 ) -> TaskResponse:
     """Create a new task."""
     return await TaskService.create_task(db, payload)
+
+
+@router.post(
+    "/import",
+    response_model=TaskImportResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses={
+        status.HTTP_201_CREATED: {
+            "description": "Raw payload stored in MongoDB and normalized into PostgreSQL.",
+            "model": TaskImportResponse,
+        },
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "description": "Raw payload stored in MongoDB, but normalization failed.",
+            "model": TaskImportResponse,
+        },
+    },
+)
+async def import_raw_task(
+    payload: TaskRawImportRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    response: Response,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> TaskImportResponse:
+    """Ingest raw task data into MongoDB first, then attempt normalization into PostgreSQL."""
+    res = await TaskImportService.import_raw_task(
+        db, payload.raw_payload, idempotency_key=idempotency_key
+    )
+    if res.status == ImportStatus.FAILED:
+        response.status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
+    return res
+
+
+@router.post(
+    "/import/batch",
+    response_model=TaskBatchImportResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def import_raw_tasks_batch(
+    payload: TaskBatchImportRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> TaskBatchImportResponse:
+    """Ingest multiple raw task payloads in batch into MongoDB and normalize to PostgreSQL."""
+    total, succeeded, failed, results = await TaskImportService.import_raw_tasks_batch(
+        db, [item.raw_payload for item in payload.items]
+    )
+    return TaskBatchImportResponse(
+        total=total,
+        succeeded=succeeded,
+        failed=failed,
+        results=results,
+    )
+
+
+@router.get("/import/{import_id}", response_model=TaskImportDetailResponse)
+async def get_raw_task_import(import_id: str) -> TaskImportDetailResponse:
+    """Retrieve raw task import details and current processing status from MongoDB."""
+    return await TaskImportService.get_import_by_id(import_id)
 
 
 @router.get("", response_model=TaskListResponse)

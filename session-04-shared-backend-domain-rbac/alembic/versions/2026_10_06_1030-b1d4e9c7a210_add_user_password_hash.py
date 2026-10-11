@@ -1,7 +1,7 @@
 """add_user_password_hash
 
 Revision ID: b1d4e9c7a210
-# Revises: f7715786b494
+# Revises: ab1234567890
 # Create Date: 2026-10-06 10:30:00.000000
 
 """
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "b1d4e9c7a210"
-down_revision: str | None = "f7715786b494"
+down_revision: str | None = "ab1234567890"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

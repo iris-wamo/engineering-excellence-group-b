@@ -4,7 +4,7 @@
 > (what are you allowed to do?).
 
 ## Loom Video
-Paste Loom link here. _(Not yet recorded.)_
+https://www.loom.com/share/798b832bf2a14e4ea02d71be3283b3fb
 
 ## Objective
 Prove that the API can:

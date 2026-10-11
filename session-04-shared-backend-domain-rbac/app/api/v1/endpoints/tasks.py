@@ -6,8 +6,10 @@ from fastapi import APIRouter, Depends, Header, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from taskflow_shared.enums import ImportStatus
 
+from app.auth.dependencies import CurrentUser
 from app.auth.permissions import (
     Permission,
+    require_project_permission,
     require_task_assignee,
     require_task_permission,
 )
@@ -37,8 +39,10 @@ router = APIRouter(prefix="/tasks", tags=["tasks"])
 async def create_task(
     payload: TaskCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: CurrentUser,
 ) -> TaskResponse:
-    """Create a new task."""
+    """Create a new task. Requires admin, manager, or owner in the task's project."""
+    await require_project_permission(db, current_user, payload.project_id, Permission.task_create)
     return await TaskService.create_task(db, payload)
 
 

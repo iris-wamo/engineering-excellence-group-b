@@ -261,3 +261,92 @@ async def test_unauthenticated_status_update_returns_401(
     )
 
     assert response.status_code == 401
+
+
+async def test_admin_can_create_task(
+    client: AsyncClient, project: Project, make_user: MakeUser
+) -> None:
+    admin = await make_user("admin@example.com", ProjectRole.admin)
+
+    response = await client.post(
+        "/api/v1/tasks",
+        json={"title": "New Task", "project_id": project.id},
+        headers=admin.headers,
+    )
+
+    assert response.status_code == 201
+
+
+async def test_manager_can_create_task(
+    client: AsyncClient, project: Project, make_user: MakeUser
+) -> None:
+    manager = await make_user("manager@example.com", ProjectRole.manager)
+
+    response = await client.post(
+        "/api/v1/tasks",
+        json={"title": "New Task", "project_id": project.id},
+        headers=manager.headers,
+    )
+
+    assert response.status_code == 201
+
+
+async def test_member_cannot_create_task(
+    client: AsyncClient, project: Project, make_user: MakeUser
+) -> None:
+    member = await make_user("member@example.com", ProjectRole.member)
+
+    response = await client.post(
+        "/api/v1/tasks",
+        json={"title": "New Task", "project_id": project.id},
+        headers=member.headers,
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "FORBIDDEN"
+
+
+async def test_user_with_no_role_in_project_cannot_create_task(
+    client: AsyncClient, project: Project, make_user: MakeUser
+) -> None:
+    outsider = await make_user("outsider@example.com")
+
+    response = await client.post(
+        "/api/v1/tasks",
+        json={"title": "New Task", "project_id": project.id},
+        headers=outsider.headers,
+    )
+
+    assert response.status_code == 403
+
+
+async def test_unauthenticated_task_create_returns_401(
+    client: AsyncClient, project: Project
+) -> None:
+    response = await client.post(
+        "/api/v1/tasks", json={"title": "New Task", "project_id": project.id}
+    )
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "UNAUTHENTICATED"
+
+
+async def test_project_creator_becomes_owner_and_can_create_tasks(
+    client: AsyncClient, make_user: MakeUser
+) -> None:
+    """An admin must be able to add tasks to a project they just created."""
+    admin = await make_user("admin@example.com", ProjectRole.admin)
+
+    created = await client.post(
+        "/api/v1/projects", json={"name": "Fresh Project"}, headers=admin.headers
+    )
+    assert created.status_code == 201
+    new_project_id = created.json()["id"]
+
+    response = await client.post(
+        "/api/v1/tasks",
+        json={"title": "First Task", "project_id": new_project_id},
+        headers=admin.headers,
+    )
+
+    assert response.status_code == 201

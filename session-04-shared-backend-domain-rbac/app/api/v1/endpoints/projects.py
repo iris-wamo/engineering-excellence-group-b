@@ -8,23 +8,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.permissions import Permission, require_permission
 from app.db.session import get_db
 from app.models.project import Project
+from app.models.user import User
 from app.schemas import ProjectCreate, ProjectListResponse, ProjectResponse
 from app.services.project_service import ProjectService
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
 
-@router.post(
-    "",
-    response_model=ProjectResponse,
-    status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_permission(Permission.project_create))],
-)
+@router.post("", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
 async def create_project(
-    project: ProjectCreate, db: Annotated[AsyncSession, Depends(get_db)]
+    project: ProjectCreate,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(require_permission(Permission.project_create))],
 ) -> Project:
-    """Create a new project. Requires the admin role."""
-    return await ProjectService.create_project(db, project)
+    """Create a new project. Requires the admin role; the creator becomes its owner."""
+    return await ProjectService.create_project(db, project, created_by_id=current_user.id)
 
 
 @router.get("", response_model=ProjectListResponse)

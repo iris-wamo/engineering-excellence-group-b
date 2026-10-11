@@ -17,6 +17,7 @@ from app.models.enums import ProjectRole
 from app.models.task import Task
 from app.models.user import User
 from app.repositories.membership_repository import MembershipRepository
+from app.repositories.project_repository import ProjectRepository
 from app.repositories.task_repository import TaskRepository
 
 
@@ -25,6 +26,7 @@ class Permission(StrEnum):
 
     project_create = "project_create"
     user_manage = "user_manage"
+    task_create = "task_create"
     task_assign = "task_assign"
 
 
@@ -32,12 +34,13 @@ ROLE_PERMISSIONS: dict[ProjectRole, set[Permission]] = {
     ProjectRole.admin: {
         Permission.project_create,
         Permission.user_manage,
+        Permission.task_create,
         Permission.task_assign,
     },
-    ProjectRole.manager: {Permission.task_assign},
-    # "owner" predates RBAC and marks who owns a project; an owner may assign work
-    # inside it, but may not create projects or manage users.
-    ProjectRole.owner: {Permission.task_assign},
+    ProjectRole.manager: {Permission.task_create, Permission.task_assign},
+    # "owner" predates RBAC and marks who owns a project; an owner may create and assign
+    # work inside it, but may not create projects or manage users.
+    ProjectRole.owner: {Permission.task_create, Permission.task_assign},
     # A member has no role-based permissions. They act on their own tasks only,
     # which is an ownership check rather than a role check (see require_task_assignee).
     ProjectRole.member: set(),
@@ -85,6 +88,31 @@ def require_task_permission(
         return current_user
 
     return dependency
+
+
+async def require_project_permission(
+    db: AsyncSession, current_user: User, project_id: int, permission: Permission
+) -> None:
+    """Check a permission against the user's role in a project named in the request body.
+
+    Called from the endpoint rather than built as a dependency, because the project id
+    arrives in the body and a dependency declaring a second body parameter would change
+    the request schema.
+    """
+    # Raised before the role check so a missing project still answers 404, matching the
+    # task service, rather than 403.
+    project = await ProjectRepository.get_by_id(db, project_id)
+    if project is None:
+        raise NotFoundError(
+            "Project not found",
+            details=[{"field": "project_id", "message": "Project does not exist"}],
+        )
+
+    role = await MembershipRepository.get_role_in_project(
+        db, user_id=current_user.id, project_id=project_id
+    )
+    if role is None or not role_allows(role, permission):
+        raise ForbiddenError()
 
 
 async def require_task_assignee(

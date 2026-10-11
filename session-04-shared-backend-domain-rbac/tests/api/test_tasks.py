@@ -18,6 +18,7 @@ async def test_create_task_returns_201_and_payload(
     response = await client.post(
         "/api/v1/tasks",
         json={"title": "Login", "project_id": project_id},
+        headers=admin_headers,
     )
 
     assert response.status_code == 201
@@ -37,6 +38,7 @@ async def test_create_task_rejects_blank_title(
     response = await client.post(
         "/api/v1/tasks",
         json={"title": "", "project_id": project_id},
+        headers=admin_headers,
     )
 
     assert response.status_code == 422
@@ -55,8 +57,12 @@ async def test_list_tasks_returns_paginated_envelope(
     project_id = (
         await client.post("/api/v1/projects", json={"name": "Alpha"}, headers=admin_headers)
     ).json()["id"]
-    await client.post("/api/v1/tasks", json={"title": "A", "project_id": project_id})
-    await client.post("/api/v1/tasks", json={"title": "B", "project_id": project_id})
+    await client.post(
+        "/api/v1/tasks", json={"title": "A", "project_id": project_id}, headers=admin_headers
+    )
+    await client.post(
+        "/api/v1/tasks", json={"title": "B", "project_id": project_id}, headers=admin_headers
+    )
 
     response = await client.get("/api/v1/tasks?page=1&page_size=1")
 
@@ -80,6 +86,7 @@ async def test_update_task_status(
         await client.post(
             "/api/v1/tasks",
             json={"title": "Login", "project_id": project_id, "assignee_id": member.id},
+            headers=admin_headers,
         )
     ).json()["id"]
 
@@ -93,10 +100,13 @@ async def test_update_task_status(
     assert response.json()["status"] == "in_progress"
 
 
-async def test_create_task_returns_404_for_missing_project(client: AsyncClient) -> None:
+async def test_create_task_returns_404_for_missing_project(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
     response = await client.post(
         "/api/v1/tasks",
         json={"title": "Login", "project_id": 999900000},
+        headers=admin_headers,
     )
 
     assert response.status_code == 404
@@ -113,6 +123,7 @@ async def test_create_task_returns_404_for_missing_assignee(
     response = await client.post(
         "/api/v1/tasks",
         json={"title": "Login", "project_id": project_id, "assignee_id": 999900000},
+        headers=admin_headers,
     )
 
     assert response.status_code == 404

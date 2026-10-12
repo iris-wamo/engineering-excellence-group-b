@@ -51,6 +51,11 @@ ignore = ["B008"]  # FastAPI uses Depends() in function defaults intentionally
 [tool.pytest.ini_options]
 testpaths = ["tests", "packages/taskflow_shared/tests"]
 asyncio_mode = "auto"
+markers = [
+    "unit: pure logic, no database or network (tests/unit)",
+    "integration: services and API routes against the test databases (tests/integration)",
+    "auth: authentication, RBAC, and tenant isolation checks (tests/auth)",
+]
 
 [tool.mypy]
 mypy_path = ["packages/taskflow_shared"]

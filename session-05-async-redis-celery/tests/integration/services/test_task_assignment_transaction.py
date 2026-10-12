@@ -24,6 +24,7 @@ from app.schemas.user import UserCreate
 from app.services.project_service import ProjectService
 from app.services.task_service import TaskService
 from app.services.user_service import UserService
+from tests.fixtures.factories import MISSING_ID
 
 
 @pytest.fixture
@@ -345,7 +346,7 @@ async def test_assign_task_nonexistent_user_raises_not_found(
         await TaskService.assign_task(
             db_session,
             task_id=task_id,
-            data=TaskAssignRequest(assignee_id=99999),
+            data=TaskAssignRequest(assignee_id=MISSING_ID),
         )
 
 

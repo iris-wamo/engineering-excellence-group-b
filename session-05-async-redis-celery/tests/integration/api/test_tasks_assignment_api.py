@@ -1,7 +1,5 @@
 """API tests for the /tasks/{id}/assign endpoint."""
 
-from collections.abc import Awaitable, Callable
-
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,9 +13,7 @@ from app.schemas.user import UserCreate
 from app.services.project_service import ProjectService
 from app.services.task_service import TaskService
 from app.services.user_service import UserService
-from tests.conftest import AuthedUser
-
-MakeUser = Callable[..., Awaitable[AuthedUser]]
+from tests.fixtures.auth import MakeUser
 
 
 async def test_api_assign_task_success(

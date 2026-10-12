@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models.user import User
-from tests.conftest import AUTH_USER
+from tests.fixtures.auth import AUTH_USER
 
 SIGNUP = {"name": "New User", "email": "new-user@example.com", "password": "sup3r-secret"}
 

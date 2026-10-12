@@ -96,7 +96,7 @@ curl -X POST http://localhost:8000/api/v1/tasks/import/batch \
 
 ### Test Execution
 ```bash
-uv run pytest tests/schemas/test_task_import_schema.py tests/services/test_task_import_service.py tests/api/test_task_imports.py
+uv run pytest tests/unit/schemas/test_task_import_schema.py tests/integration/services/test_task_import_service.py tests/integration/api/test_task_imports.py
 ```
 ```text
 tests/schemas/test_task_import_schema.py .....                           [ 33%]

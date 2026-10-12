@@ -355,3 +355,71 @@ async def test_get_import_by_id_invalid_id() -> None:
 async def test_get_import_by_id_not_found() -> None:
     with pytest.raises(NotFoundError):
         await TaskImportService.get_import_by_id("6701a2b3c4d5e6f7a8b9c0d1")
+
+
+async def test_idempotent_retry_reconciles_pending_import_after_post_commit_failure(
+    db_session: AsyncSession,
+) -> None:
+    """When post-commit Mongo update fails, an idempotent retry self-heals PENDING to SUCCESS."""
+    project = await _create_test_project(db_session, name="Reconcile Proj", slug="reconcile-proj")
+    raw = {
+        "title": "Idempotent Reconcile Task",
+        "project_id": project.id,
+        "jira_key": "RECON-101",
+    }
+    col = get_raw_task_imports_collection()
+
+    # Step 1: Simulate post-commit Mongo failure on initial attempt
+    with patch.object(col, "update_one", side_effect=ConnectionError("Simulated Mongo failure")):
+        first_result = await TaskImportService.import_raw_task(db_session, raw, collection=col)
+
+    # In Postgres, task was committed
+    assert first_result.postgres_task_id is not None
+    committed_task_id = first_result.postgres_task_id
+
+    # In MongoDB, document was left in PENDING because update_one failed
+    doc = await col.find_one({"idempotency_key": "RECON-101"})
+    assert doc is not None
+    assert doc["status"] == "PENDING"
+    assert doc["postgres_task_id"] is None
+
+    # Step 2: Retry with the same idempotency key (normal Mongo operation)
+    retry_result = await TaskImportService.import_raw_task(db_session, raw, collection=col)
+
+    # Verification: Result should be reconciled to SUCCESS with the committed task ID
+    assert retry_result.status == "SUCCESS"
+    assert retry_result.postgres_task_id == committed_task_id
+    assert retry_result.import_id == str(doc["_id"])
+
+    # MongoDB document should now be updated to SUCCESS
+    updated_doc = await col.find_one({"_id": doc["_id"]})
+    assert updated_doc is not None
+    assert updated_doc["status"] == "SUCCESS"
+    assert updated_doc["postgres_task_id"] == committed_task_id
+
+
+async def test_idempotent_retry_on_uncommitted_pending_record_stays_pending(
+    db_session: AsyncSession,
+) -> None:
+    """When a pending import has no matching Postgres task, retry preserves PENDING."""
+    from datetime import UTC, datetime
+
+    col = get_raw_task_imports_collection()
+    doc_res = await col.insert_one(
+        {
+            "raw_payload": {"title": "In flight task"},
+            "idempotency_key": "IN-FLIGHT-999",
+            "status": "PENDING",
+            "postgres_task_id": None,
+            "error_details": None,
+            "created_at": datetime.now(UTC),
+            "updated_at": datetime.now(UTC),
+        }
+    )
+
+    raw = {"title": "In flight task", "idempotency_key": "IN-FLIGHT-999"}
+    result = await TaskImportService.import_raw_task(db_session, raw, collection=col)
+
+    assert result.status == "PENDING"
+    assert result.postgres_task_id is None
+    assert result.import_id == str(doc_res.inserted_id)

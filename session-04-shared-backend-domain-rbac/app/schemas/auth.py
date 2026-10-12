@@ -3,6 +3,20 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 from app.auth.security import MAX_PASSWORD_BYTES
 
 
+def validate_password_bytes(value: str) -> str:
+    """Reject passwords bcrypt cannot hash.
+
+    Field(max_length=...) counts characters, not bytes, so a short multi-byte password
+    such as 40 x "e-acute" (80 bytes) would pass that check and then make bcrypt raise.
+    """
+    if len(value.encode()) > MAX_PASSWORD_BYTES:
+        raise ValueError(
+            f"Password must not exceed {MAX_PASSWORD_BYTES} bytes. "
+            "Please use a shorter password or fewer special characters."
+        )
+    return value
+
+
 class SignupRequest(BaseModel):
     """Schema for registering a new account."""
 
@@ -21,8 +35,10 @@ class SignupRequest(BaseModel):
     password: str = Field(
         ...,
         min_length=8,
-        max_length=MAX_PASSWORD_BYTES,
-        description="Plain-text password, hashed before storage and never returned.",
+        description=(
+            f"Plain-text password, hashed before storage and never returned. "
+            f"At most {MAX_PASSWORD_BYTES} bytes once UTF-8 encoded."
+        ),
         examples=["sup3r-secret"],
     )
 
@@ -40,6 +56,11 @@ class SignupRequest(BaseModel):
     @classmethod
     def normalize_email(cls, value: str) -> str:
         return value.lower()
+
+    @field_validator("password")
+    @classmethod
+    def check_password_bytes(cls, value: str) -> str:
+        return validate_password_bytes(value)
 
 
 class LoginRequest(BaseModel):

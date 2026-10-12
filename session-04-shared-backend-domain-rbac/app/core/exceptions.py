@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from fastapi import status
 from taskflow_shared.errors import (
     AppError,
     ConflictError,
@@ -49,6 +50,27 @@ class UserNotFoundError(NotFoundError):
             message,
             details=details or [{"field": "user_id", "message": "User does not exist"}],
         )
+
+
+class AuthenticationError(AppError):
+    """Base class for every authentication failure, so they all share one response shape."""
+
+    code = "UNAUTHENTICATED"
+    status_code = status.HTTP_401_UNAUTHORIZED
+
+
+class InvalidCredentialsError(AuthenticationError):
+    """Raised when login is attempted with an unknown email or a wrong password."""
+
+    def __init__(self) -> None:
+        super().__init__("Invalid email or password")
+
+
+class NotAuthenticatedError(AuthenticationError):
+    """Raised when a request carries a missing, invalid, or expired access token."""
+
+    def __init__(self) -> None:
+        super().__init__("Missing or invalid authentication credentials")
 
 
 class ProjectMembershipRequiredError(AppError):

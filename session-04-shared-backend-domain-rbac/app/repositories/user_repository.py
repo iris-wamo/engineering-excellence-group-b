@@ -10,8 +10,10 @@ from app.models.user import User
 
 class UserRepository:
     @staticmethod
-    async def create(db: AsyncSession, *, name: str, email: str) -> User:
-        user = User(name=name, email=email)
+    async def create(
+        db: AsyncSession, *, name: str, email: str, password_hash: str | None = None
+    ) -> User:
+        user = User(name=name, email=email, password_hash=password_hash)
         try:
             db.add(user)
             await db.commit()

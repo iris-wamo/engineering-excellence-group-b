@@ -18,6 +18,9 @@ class User(Base, TimestampMixin):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    # Nullable because users created before authentication existed (and seeded rows) have
+    # no password; those accounts simply cannot log in until they sign up with one.
+    password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
 
     tasks: Mapped[list["Task"]] = relationship(back_populates="assignee")

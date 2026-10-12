@@ -41,6 +41,7 @@ uv run pytest tests/integration/api/test_invalid_requests.py -k missing
 ## How test data is isolated
 
 - **PostgreSQL**: tests use a separate `<db>_test` database. The schema is created once per session by `test_database`, with Workspace 1 inserted the way the migration does. Each test gets `db_session`, which runs inside one outer transaction that is rolled back afterwards. Application code that calls `commit()` only commits a savepoint, so nothing leaks between tests.
+- **Isolation is tested**: `integration/test_db_session_isolation.py` drives `rolled_back_session` (what `db_session` is built on) and checks from a separate connection that commits, exceptions and application-level `rollback()` calls leave nothing behind.
 - **MongoDB**: `settings.mongo_db` points at `<db>_test` for the whole run. The `raw_task_imports` collection is emptied at the start of every test that uses `db_session`.
 - **Opt-in setup**: a test that never asks for `db_session` (directly, or through `client` or `factory`) never connects to a database. That is what keeps `-m unit` free of Docker.
 - **Real commits**: tests that need data committed across sessions request `test_database` and open their own sessions, for example `integration/services/test_task_status_concurrency.py`. They must clean up the rows they create.

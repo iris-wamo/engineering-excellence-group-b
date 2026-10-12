@@ -7,6 +7,7 @@ PostgreSQL or MongoDB. Any test that asks for `db_session` (directly, or through
 """
 
 from collections.abc import AsyncGenerator, Generator
+from contextlib import asynccontextmanager
 from typing import Any
 
 import pytest
@@ -79,32 +80,41 @@ def test_mongo_database() -> Generator[str, None]:
     sync_client.close()
 
 
+@asynccontextmanager
+async def rolled_back_session(database_url: str) -> AsyncGenerator[AsyncSession, None]:
+    """A session inside one outer transaction that is rolled back on exit, even on error.
+
+    Commits made by application code become savepoints inside that transaction, so code
+    that commits still leaves nothing behind. Kept separate from the `db_session`
+    fixture so tests/integration/test_db_session_isolation.py can check the rollback.
+    """
+    engine = create_async_engine(database_url)
+    connection = await engine.connect()
+    transaction = await connection.begin()
+    try:
+        testing_session_local = async_sessionmaker(
+            bind=connection,
+            autoflush=False,
+            expire_on_commit=False,
+            join_transaction_mode="create_savepoint",
+        )
+        async with testing_session_local() as session:
+            yield session
+    finally:
+        await transaction.rollback()
+        await connection.close()
+        await engine.dispose()
+
+
 @pytest.fixture()
 async def db_session(
     test_database: str, test_mongo_database: str
 ) -> AsyncGenerator[AsyncSession, None]:
     """A database session whose writes are rolled back after the test.
 
-    Commits made by application code become savepoints inside one outer transaction,
-    so tests can call services that commit and still leave nothing behind.
-    The raw_task_imports collection is emptied before each test as well.
+    See `rolled_back_session`. The raw_task_imports collection is emptied before each
+    test as well.
     """
     await get_raw_task_imports_collection().delete_many({})
-
-    engine = create_async_engine(test_database)
-    connection = await engine.connect()
-    transaction = await connection.begin()
-
-    testing_session_local = async_sessionmaker(
-        bind=connection,
-        autoflush=False,
-        expire_on_commit=False,
-        join_transaction_mode="create_savepoint",
-    )
-
-    async with testing_session_local() as session:
+    async with rolled_back_session(test_database) as session:
         yield session
-
-    await transaction.rollback()
-    await connection.close()
-    await engine.dispose()

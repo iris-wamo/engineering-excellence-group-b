@@ -17,6 +17,9 @@ class Settings(BaseAppSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 15
 
+    # Multi-tenancy fallback for unauthenticated requests
+    allow_anonymous_default_workspace: bool = True
+
     @model_validator(mode="after")
     def validate_jwt_secret_key(self) -> "Settings":
         if (

@@ -476,3 +476,19 @@ async def test_same_slug_allowed_in_different_workspaces(
     )
     assert res3.status_code == 409
     assert res3.json()["error"]["code"] == "CONFLICT"
+
+
+@pytest.mark.asyncio
+async def test_anonymous_default_workspace_setting_toggle(
+    client: AsyncClient,
+) -> None:
+    """When allow_anonymous_default_workspace is False, unauthenticated requests
+    without header get 401."""
+    from unittest.mock import patch
+
+    from app.core.config import settings
+
+    with patch.object(settings, "allow_anonymous_default_workspace", False):
+        res = await client.get("/api/v1/projects")
+        assert res.status_code == 401
+        assert res.json()["error"]["code"] == "UNAUTHENTICATED"

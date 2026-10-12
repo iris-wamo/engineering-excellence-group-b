@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from taskflow_shared.contracts.constants import HEADER_WORKSPACE_ID
 
 from app.auth.dependencies import OptionalCurrentUser
+from app.core.config import settings
 from app.core.exceptions import AppError, ForbiddenError, NotAuthenticatedError, NotFoundError
 from app.db.session import get_db
 from app.repositories.workspace_repository import WorkspaceRepository
@@ -85,7 +86,8 @@ async def get_current_workspace_id(
         if any(ws.id == 1 for ws in user_workspaces):
             return 1
 
-        return user_workspaces[0].id
+    if not settings.allow_anonymous_default_workspace:
+        raise NotAuthenticatedError()
 
     return 1
 

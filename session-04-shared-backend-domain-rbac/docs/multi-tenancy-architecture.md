@@ -147,3 +147,24 @@ To fulfill the requirement that **"Existing data must continue to work"**:
 2. **API Defaults**:
    - All endpoints default `workspace_id = 1` when the `X-Workspace-ID` header is not present.
    - Existing integration tests and external clients continue to function with zero changes.
+
+---
+
+## 7. Global User Identity Model
+
+TaskFlow adopts a **Global User Identity** model (similar to GitHub, Slack, and Atlassian):
+- The `user` table represents a platform-level user account with globally unique `email`.
+- Users gain access to specific tenant workspaces through `workspace_user` memberships.
+- Global email uniqueness allows a single user identity to hold memberships in multiple workspaces with unified credentials, rather than forcing separate accounts per tenant.
+
+---
+
+## 8. Known Limitations (Session 04)
+
+1. **Anonymous Access to Default Workspace & Public User Endpoints**:
+   - To preserve backward compatibility with Session 01–03 unauthenticated test suites and legacy integrations, requests omitting `X-Workspace-ID` and authentication resolve to Workspace 1.
+   - `GET /users` and `GET /users/{id}` remain public read endpoints returning global account profiles.
+   - This behavior is gated behind the `ALLOW_ANONYMOUS_DEFAULT_WORKSPACE` configuration setting (default: `true`), allowing environments to enforce strict authentication across all workspace endpoints when ready.
+2. **Signup Auto-Enrollment into Workspace 1**:
+   - Self-registration via `/auth/signup` automatically enrolls users into Workspace 1 because workspace invitation workflows and tenant self-provisioning screens are explicitly out of scope for Session 04 (Issue #72).
+   - A follow-up issue tracks requiring authentication on all tenant-scoped endpoints and decoupling new account signup from Workspace 1.

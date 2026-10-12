@@ -1,5 +1,7 @@
 from httpx import AsyncClient
 
+from tests.fixtures.factories import MISSING_ID
+
 
 async def test_create_project_returns_201_and_payload(
     client: AsyncClient, admin_headers: dict[str, str]
@@ -57,7 +59,7 @@ async def test_get_project_returns_created_project_by_id(
 async def test_get_project_returns_404_error_envelope_for_missing_project(
     client: AsyncClient,
 ) -> None:
-    response = await client.get("/api/v1/projects/999900000")
+    response = await client.get(f"/api/v1/projects/{MISSING_ID}")
 
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "NOT_FOUND"

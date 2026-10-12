@@ -1,26 +1,11 @@
 """One allowed and one denied test per row of docs/rbac-authorization-matrix.md."""
 
-from collections.abc import Awaitable, Callable
-
 from httpx import AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.enums import ProjectRole, TaskStatus
 from app.models.project import Project
-from app.models.task import Task
-from tests.conftest import AuthedUser
-
-MakeUser = Callable[..., Awaitable[AuthedUser]]
-
-
-async def _add_task(
-    db_session: AsyncSession, project: Project, assignee_id: int | None = None
-) -> Task:
-    task = Task(title="Task", project_id=project.id, assignee_id=assignee_id)
-    db_session.add(task)
-    await db_session.commit()
-    await db_session.refresh(task)
-    return task
+from tests.fixtures.auth import MakeUser
+from tests.fixtures.factories import DataFactory
 
 
 async def test_admin_can_create_project(client: AsyncClient, make_user: MakeUser) -> None:
@@ -104,11 +89,11 @@ async def test_member_cannot_manage_users(client: AsyncClient, make_user: MakeUs
 
 
 async def test_manager_can_assign_task(
-    client: AsyncClient, db_session: AsyncSession, project: Project, make_user: MakeUser
+    client: AsyncClient, factory: DataFactory, project: Project, make_user: MakeUser
 ) -> None:
     manager = await make_user("manager@example.com", ProjectRole.manager)
     member = await make_user("member@example.com", ProjectRole.member)
-    task = await _add_task(db_session, project)
+    task = await factory.task(project)
 
     response = await client.post(
         f"/api/v1/tasks/{task.id}/assign",
@@ -121,11 +106,11 @@ async def test_manager_can_assign_task(
 
 
 async def test_admin_can_assign_task(
-    client: AsyncClient, db_session: AsyncSession, project: Project, make_user: MakeUser
+    client: AsyncClient, factory: DataFactory, project: Project, make_user: MakeUser
 ) -> None:
     admin = await make_user("admin@example.com", ProjectRole.admin)
     member = await make_user("member@example.com", ProjectRole.member)
-    task = await _add_task(db_session, project)
+    task = await factory.task(project)
 
     response = await client.post(
         f"/api/v1/tasks/{task.id}/assign",
@@ -137,10 +122,10 @@ async def test_admin_can_assign_task(
 
 
 async def test_member_cannot_assign_task(
-    client: AsyncClient, db_session: AsyncSession, project: Project, make_user: MakeUser
+    client: AsyncClient, factory: DataFactory, project: Project, make_user: MakeUser
 ) -> None:
     member = await make_user("member@example.com", ProjectRole.member)
-    task = await _add_task(db_session, project)
+    task = await factory.task(project)
 
     response = await client.post(
         f"/api/v1/tasks/{task.id}/assign",
@@ -153,18 +138,15 @@ async def test_member_cannot_assign_task(
 
 
 async def test_manager_of_another_project_cannot_assign_task(
-    client: AsyncClient, db_session: AsyncSession, project: Project, make_user: MakeUser
+    client: AsyncClient, factory: DataFactory, project: Project, make_user: MakeUser
 ) -> None:
     """Roles are per project, so a manager elsewhere has no say in this project."""
-    other_project = Project(name="Other", slug="other")
-    db_session.add(other_project)
-    await db_session.commit()
-    await db_session.refresh(other_project)
+    other_project = await factory.project(name="Other")
 
     outsider = await make_user(
         "outsider@example.com", ProjectRole.manager, project_id=other_project.id
     )
-    task = await _add_task(db_session, project)
+    task = await factory.task(project)
 
     response = await client.post(
         f"/api/v1/tasks/{task.id}/assign",
@@ -176,10 +158,10 @@ async def test_manager_of_another_project_cannot_assign_task(
 
 
 async def test_member_can_update_status_of_own_task(
-    client: AsyncClient, db_session: AsyncSession, project: Project, make_user: MakeUser
+    client: AsyncClient, factory: DataFactory, project: Project, make_user: MakeUser
 ) -> None:
     member = await make_user("member@example.com", ProjectRole.member)
-    task = await _add_task(db_session, project, assignee_id=member.id)
+    task = await factory.task(project, assignee=member.id)
 
     response = await client.patch(
         f"/api/v1/tasks/{task.id}/status",
@@ -192,11 +174,11 @@ async def test_member_can_update_status_of_own_task(
 
 
 async def test_member_cannot_update_status_of_someone_elses_task(
-    client: AsyncClient, db_session: AsyncSession, project: Project, make_user: MakeUser
+    client: AsyncClient, factory: DataFactory, project: Project, make_user: MakeUser
 ) -> None:
     member = await make_user("member@example.com", ProjectRole.member)
     other = await make_user("other@example.com", ProjectRole.member)
-    task = await _add_task(db_session, project, assignee_id=other.id)
+    task = await factory.task(project, assignee=other.id)
 
     response = await client.patch(
         f"/api/v1/tasks/{task.id}/status",
@@ -209,12 +191,12 @@ async def test_member_cannot_update_status_of_someone_elses_task(
 
 
 async def test_admin_cannot_update_status_of_someone_elses_task(
-    client: AsyncClient, db_session: AsyncSession, project: Project, make_user: MakeUser
+    client: AsyncClient, factory: DataFactory, project: Project, make_user: MakeUser
 ) -> None:
     """Status is an ownership check, so even an admin must be the assignee."""
     admin = await make_user("admin@example.com", ProjectRole.admin)
     member = await make_user("member@example.com", ProjectRole.member)
-    task = await _add_task(db_session, project, assignee_id=member.id)
+    task = await factory.task(project, assignee=member.id)
 
     response = await client.patch(
         f"/api/v1/tasks/{task.id}/status",
@@ -242,9 +224,9 @@ async def test_unauthenticated_user_create_returns_401(client: AsyncClient) -> N
 
 
 async def test_unauthenticated_task_assign_returns_401(
-    client: AsyncClient, db_session: AsyncSession, project: Project
+    client: AsyncClient, factory: DataFactory, project: Project
 ) -> None:
-    task = await _add_task(db_session, project)
+    task = await factory.task(project)
 
     response = await client.post(f"/api/v1/tasks/{task.id}/assign", json={"assignee_id": None})
 
@@ -252,9 +234,9 @@ async def test_unauthenticated_task_assign_returns_401(
 
 
 async def test_unauthenticated_status_update_returns_401(
-    client: AsyncClient, db_session: AsyncSession, project: Project
+    client: AsyncClient, factory: DataFactory, project: Project
 ) -> None:
-    task = await _add_task(db_session, project)
+    task = await factory.task(project)
 
     response = await client.patch(
         f"/api/v1/tasks/{task.id}/status", json={"status": TaskStatus.done.value}

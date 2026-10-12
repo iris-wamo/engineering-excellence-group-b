@@ -16,13 +16,14 @@ from app.schemas.task import TaskCreate, TaskStatusUpdate
 from app.services.project_service import ProjectService
 from app.services.task_service import TaskService, _get_task_or_404
 from app.workflows.task_workflow import InvalidStatusTransitionError, TaskWorkflow
-from tests.conftest import TEST_DATABASE_URL
 
 
 @pytest.fixture
-async def session_factory() -> AsyncGenerator[async_sessionmaker[AsyncSession], None]:
+async def session_factory(
+    test_database: str,
+) -> AsyncGenerator[async_sessionmaker[AsyncSession], None]:
     """Independent sessions that really commit (unlike the rolled-back db_session fixture)."""
-    engine = create_async_engine(TEST_DATABASE_URL)
+    engine = create_async_engine(test_database)
     yield async_sessionmaker(engine, expire_on_commit=False)
     await engine.dispose()
 

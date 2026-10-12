@@ -2,7 +2,7 @@
 
 from httpx import AsyncClient
 
-from tests.fixtures.factories import DataFactory
+from tests.fixtures.factories import MISSING_ID, DataFactory
 
 
 async def test_api_import_raw_task_success(client: AsyncClient, factory: DataFactory) -> None:
@@ -128,7 +128,7 @@ async def test_api_import_raw_tasks_batch_mixed_results(
             {
                 "raw_payload": {
                     "summary": "Invalid Task in Batch",
-                    "project_id": 9999999,
+                    "project_id": MISSING_ID,
                     "priority": "low",
                 }
             },
@@ -150,7 +150,7 @@ async def test_api_import_raw_tasks_batch_mixed_results(
     res_fail = data["results"][1]
     assert res_fail["status"] == "FAILED"
     assert res_fail["postgres_task_id"] is None
-    assert "9999999 not found" in res_fail["error_details"]["message"]
+    assert f"{MISSING_ID} not found" in res_fail["error_details"]["message"]
 
 
 async def test_api_import_raw_tasks_batch_rejects_empty_items(client: AsyncClient) -> None:

@@ -76,7 +76,7 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as test_client:
         yield test_client
-    app.dependency_overrides.clear()
+    app.dependency_overrides.pop(get_db, None)
 
 
 @pytest.fixture()

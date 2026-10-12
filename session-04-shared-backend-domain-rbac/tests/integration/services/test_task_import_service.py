@@ -10,7 +10,7 @@ from app.core.exceptions import NotFoundError
 from app.db.mongo import get_raw_task_imports_collection
 from app.models.task import Task
 from app.services.task_import_service import TaskImportService
-from tests.fixtures.factories import DataFactory
+from tests.fixtures.factories import MISSING_ID, DataFactory
 
 
 async def test_import_raw_task_success(db_session: AsyncSession, factory: DataFactory) -> None:
@@ -161,7 +161,7 @@ async def test_import_raw_task_float_project_id_fails(db_session: AsyncSession) 
 async def test_import_raw_task_nonexistent_project_fails(db_session: AsyncSession) -> None:
     raw = {
         "title": "Task for Ghost Project",
-        "project_id": 999999,
+        "project_id": MISSING_ID,
         "priority": "medium",
     }
 
@@ -170,7 +170,7 @@ async def test_import_raw_task_nonexistent_project_fails(db_session: AsyncSessio
     assert result.status == "FAILED"
     assert result.postgres_task_id is None
     assert result.error_details is not None
-    assert "Project 999999 not found" in str(result.error_details.get("message"))
+    assert f"Project {MISSING_ID} not found" in str(result.error_details.get("message"))
 
     # Verify PostgreSQL rollback
     count = (await db_session.execute(select(Task))).scalars().all()
@@ -296,7 +296,7 @@ async def test_import_raw_tasks_batch_mid_batch_failure_preserves_other_commits(
         {"summary": "Batch 1 (Success)", "project_id": project.id, "priority": "high"},
         {
             "summary": "Batch 2 (Fail - Nonexistent Proj)",
-            "project_id": 999999,
+            "project_id": MISSING_ID,
             "priority": "medium",
         },
         {"summary": "Batch 3 (Success)", "project_id": project.id, "priority": "low"},

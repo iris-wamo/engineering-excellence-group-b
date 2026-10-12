@@ -21,7 +21,7 @@ from app.models.project import Project
 from app.models.task import Task
 from app.models.workspace import Workspace
 from tests.fixtures.auth import AuthedUser, auth_headers_for
-from tests.fixtures.factories import DataFactory
+from tests.fixtures.factories import MISSING_ID, DataFactory
 
 
 class WorkspaceSetup(NamedTuple):
@@ -282,7 +282,7 @@ async def test_invalid_and_nonexistent_workspace_headers(
     # 3. Non-existent workspace ID -> 404
     res = await client.get(
         "/api/v1/projects",
-        headers={**user1.headers, HEADER_WORKSPACE_ID: "999999"},
+        headers={**user1.headers, HEADER_WORKSPACE_ID: str(MISSING_ID)},
     )
     assert res.status_code == 404
     assert res.json()["error"]["code"] == "NOT_FOUND"

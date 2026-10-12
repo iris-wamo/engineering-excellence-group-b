@@ -2,6 +2,7 @@ from httpx import AsyncClient
 
 from app.models.enums import ProjectRole
 from tests.fixtures.auth import MakeUser
+from tests.fixtures.factories import MISSING_ID
 
 
 async def test_create_task_returns_201_and_payload(
@@ -39,7 +40,7 @@ async def test_create_task_rejects_blank_title(
 
 
 async def test_get_task_returns_404_for_missing_task(client: AsyncClient) -> None:
-    response = await client.get("/api/v1/tasks/999900000")
+    response = await client.get(f"/api/v1/tasks/{MISSING_ID}")
 
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "NOT_FOUND"
@@ -92,7 +93,7 @@ async def test_update_task_status(
 async def test_create_task_returns_404_for_missing_project(client: AsyncClient) -> None:
     response = await client.post(
         "/api/v1/tasks",
-        json={"title": "Login", "project_id": 999900000},
+        json={"title": "Login", "project_id": MISSING_ID},
     )
 
     assert response.status_code == 404
@@ -108,7 +109,7 @@ async def test_create_task_returns_404_for_missing_assignee(
 
     response = await client.post(
         "/api/v1/tasks",
-        json={"title": "Login", "project_id": project_id, "assignee_id": 999900000},
+        json={"title": "Login", "project_id": project_id, "assignee_id": MISSING_ID},
     )
 
     assert response.status_code == 404
@@ -119,7 +120,7 @@ async def test_update_task_status_returns_404_for_missing_task(
     client: AsyncClient, admin_headers: dict[str, str]
 ) -> None:
     response = await client.patch(
-        "/api/v1/tasks/999900000/status",
+        f"/api/v1/tasks/{MISSING_ID}/status",
         json={"status": "in_progress"},
         headers=admin_headers,
     )

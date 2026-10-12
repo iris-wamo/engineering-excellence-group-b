@@ -88,7 +88,7 @@ class DataFactory:
                 is_active=is_active,
             )
         )
-        for workspace_id in workspace_ids:
+        for workspace_id in dict.fromkeys(workspace_ids):
             await self.add_to_workspace(user, workspace_id)
         return user
 

@@ -14,6 +14,7 @@ from app.auth.permissions import (
 from app.auth.workspace_context import CurrentWorkspaceId
 from app.db.session import get_db
 from app.models.enums import TaskPriority, TaskStatus
+from app.models.user import User
 from app.schemas.task import (
     TaskAssignRequest,
     TaskCreate,
@@ -143,28 +144,40 @@ async def get_task(
 @router.patch(
     "/{task_id}/status",
     response_model=TaskResponse,
-    dependencies=[Depends(require_task_assignee)],
 )
 async def update_task_status(
     task_id: int,
     payload: TaskStatusUpdate,
     db: Annotated[AsyncSession, Depends(get_db)],
     workspace_id: CurrentWorkspaceId,
+    current_user: Annotated[User, Depends(require_task_assignee)],
 ) -> TaskResponse:
     """Update the status of an existing task. Only the task's assignee may do this."""
-    return await TaskService.update_task_status(db, task_id, payload, workspace_id=workspace_id)
+    return await TaskService.update_task_status(
+        db,
+        task_id,
+        payload,
+        workspace_id=workspace_id,
+        changed_by_id=current_user.id,
+    )
 
 
 @router.post(
     "/{task_id}/assign",
     response_model=TaskResponse,
-    dependencies=[Depends(require_task_permission(Permission.task_assign))],
 )
 async def assign_task(
     task_id: int,
     payload: TaskAssignRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
     workspace_id: CurrentWorkspaceId,
+    current_user: Annotated[User, Depends(require_task_permission(Permission.task_assign))],
 ) -> TaskResponse:
     """Assign or reassign a task. Requires admin, manager, or owner in the task's project."""
-    return await TaskService.assign_task(db, task_id, payload, workspace_id=workspace_id)
+    return await TaskService.assign_task(
+        db,
+        task_id,
+        payload,
+        workspace_id=workspace_id,
+        actor_id=current_user.id,
+    )

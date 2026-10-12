@@ -56,7 +56,12 @@ async def init_mongo_indexes(database_name: str | None = None) -> None:
     """Ensure required indexes exist on MongoDB collections."""
     try:
         col = get_raw_task_imports_collection(database_name)
-        await col.create_index("idempotency_key", unique=True, sparse=True)
+        await col.create_index(
+            [("workspace_id", 1), ("idempotency_key", 1)],
+            unique=True,
+            partialFilterExpression={"idempotency_key": {"$type": "string"}},
+            name="uq_workspace_idempotency_key",
+        )
     except Exception as exc:
         logger.warning("Could not initialize MongoDB indexes: %s", exc)
 

@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.enums import ProjectRole
+from app.models.project import Project
 from app.models.project_user import ProjectUser
 
 
@@ -34,8 +35,6 @@ class MembershipRepository:
         db: AsyncSession, *, user_id: int, workspace_id: int
     ) -> set[ProjectRole]:
         """Return every distinct role the user holds in projects within the specified workspace."""
-        from app.models.project import Project
-
         roles = await db.scalars(
             select(ProjectUser.role)
             .join(Project, ProjectUser.project_id == Project.id)

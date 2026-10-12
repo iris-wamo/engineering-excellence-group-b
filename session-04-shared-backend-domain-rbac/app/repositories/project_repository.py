@@ -26,6 +26,9 @@ class ProjectRepository:
             return project
         except IntegrityError as err:
             await db.rollback()
+            err_str = str(err).lower()
+            if "foreign key" in err_str or "fk_" in err_str:
+                raise
             raise ConflictError(
                 "A project with this name already exists in this workspace"
             ) from err

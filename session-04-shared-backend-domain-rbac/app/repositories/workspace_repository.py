@@ -78,6 +78,7 @@ class WorkspaceRepository:
             select(Workspace)
             .join(WorkspaceUser, Workspace.id == WorkspaceUser.workspace_id)
             .where(WorkspaceUser.user_id == user_id)
+            .order_by(Workspace.id.asc())
         )
         result = await db.scalars(query)
         return list(result.all())

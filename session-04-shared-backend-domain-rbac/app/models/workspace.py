@@ -28,7 +28,7 @@ class Workspace(Base, TimestampMixin):
         back_populates="workspace", cascade="all, delete-orphan"
     )
     tasks: Mapped[list["Task"]] = relationship(
-        back_populates="workspace", cascade="all, delete-orphan"
+        back_populates="workspace", cascade="all, delete-orphan", overlaps="project,tasks"
     )
     members: Mapped[list["WorkspaceUser"]] = relationship(
         back_populates="workspace", cascade="all, delete-orphan"

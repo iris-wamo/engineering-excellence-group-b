@@ -66,7 +66,10 @@ def setup_mongo_database() -> Generator[None, None]:
         str(settings.mongo_url), serverSelectionTimeoutMS=5000
     )
     sync_client[TEST_MONGO_DB]["raw_task_imports"].create_index(
-        "idempotency_key", unique=True, sparse=True
+        [("workspace_id", 1), ("idempotency_key", 1)],
+        unique=True,
+        partialFilterExpression={"idempotency_key": {"$type": "string"}},
+        name="uq_workspace_idempotency_key",
     )
 
     yield

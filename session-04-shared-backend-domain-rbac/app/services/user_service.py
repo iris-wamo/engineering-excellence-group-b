@@ -4,9 +4,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import UserNotFoundError
 from app.models.user import User
-from app.models.workspace import Workspace
-from app.models.workspace_user import WorkspaceUser
 from app.repositories.user_repository import UserRepository
+from app.repositories.workspace_repository import WorkspaceRepository
 from app.schemas.user import UserCreate
 
 
@@ -14,10 +13,11 @@ class UserService:
     @staticmethod
     async def create_user(db: AsyncSession, payload: UserCreate, workspace_id: int = 1) -> User:
         user = await UserRepository.create(db, name=payload.name, email=str(payload.email))
-        ws = await db.get(Workspace, workspace_id)
+        ws = await WorkspaceRepository.get_by_id(db, workspace_id)
         if ws is not None:
-            db.add(WorkspaceUser(workspace_id=workspace_id, user_id=user.id))
-            await db.commit()
+            await WorkspaceRepository.add_user_to_workspace(
+                db, workspace_id=workspace_id, user_id=user.id
+            )
             await db.refresh(user)
         return user
 

@@ -17,8 +17,8 @@ class Project(Base, TimestampMixin):
     __tablename__ = "project"
     __table_args__ = (
         UniqueConstraint("workspace_id", "slug", name="uq_project_workspace_slug"),
+        UniqueConstraint("id", "workspace_id", name="uq_project_id_workspace_id"),
         Index("ix_project_slug", "slug"),
-        Index("ix_project_workspace_id", "workspace_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -36,7 +36,10 @@ class Project(Base, TimestampMixin):
 
     workspace: Mapped["Workspace"] = relationship(back_populates="projects")
     tasks: Mapped[list["Task"]] = relationship(
-        back_populates="project", cascade="all, delete-orphan"
+        back_populates="project",
+        cascade="all, delete-orphan",
+        foreign_keys="[Task.project_id, Task.workspace_id]",
+        overlaps="tasks,workspace",
     )
     members: Mapped[list["ProjectUser"]] = relationship(
         back_populates="project", cascade="all, delete-orphan"

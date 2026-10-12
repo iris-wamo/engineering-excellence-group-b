@@ -18,6 +18,7 @@ from app.models.user import User
 from app.repositories.project_repository import ProjectRepository
 from app.repositories.task_repository import TaskRepository
 from app.repositories.user_repository import UserRepository
+from app.repositories.workspace_repository import WorkspaceRepository
 from app.schemas.task import (
     TaskAssignRequest,
     TaskCreate,
@@ -40,13 +41,27 @@ async def _get_project_or_404(
     return project
 
 
-async def _get_user_or_404(db: AsyncSession, user_id: int, field_name: str = "assignee_id") -> User:
+async def _get_user_or_404(
+    db: AsyncSession,
+    user_id: int,
+    field_name: str = "assignee_id",
+    workspace_id: int | None = None,
+) -> User:
     user = await UserRepository.get_by_id(db, user_id)
     if user is None:
         raise NotFoundError(
             "User not found",
             details=[{"field": field_name, "message": f"User {user_id} does not exist"}],
         )
+    if workspace_id is not None:
+        is_member = await WorkspaceRepository.is_user_in_workspace(
+            db, workspace_id=workspace_id, user_id=user_id
+        )
+        if not is_member:
+            raise NotFoundError(
+                "User not found",
+                details=[{"field": field_name, "message": f"User {user_id} does not exist"}],
+            )
     return user
 
 
@@ -94,7 +109,9 @@ class TaskService:
     ) -> TaskResponse:
         project = await _get_project_or_404(db, data.project_id, workspace_id=workspace_id)
         if data.assignee_id is not None:
-            await _get_user_or_404(db, data.assignee_id, "assignee_id")
+            await _get_user_or_404(
+                db, data.assignee_id, "assignee_id", workspace_id=project.workspace_id
+            )
             await _verify_project_membership(db, data.assignee_id, data.project_id)
 
         task = Task(
@@ -151,12 +168,13 @@ class TaskService:
         task_id: int,
         data: TaskStatusUpdate,
         workspace_id: int | None = None,
+        changed_by_id: int | None = None,
     ) -> TaskResponse:
         # Lock the row so concurrent status changes are validated one after another.
         task = await _get_task_or_404(db, task_id, workspace_id=workspace_id, for_update=True)
 
         try:
-            TaskWorkflow.transition_status(db, task, data.status)
+            TaskWorkflow.transition_status(db, task, data.status, changed_by_id=changed_by_id)
         except AppError:
             await db.rollback()  # release the row lock
             raise
@@ -170,14 +188,38 @@ class TaskService:
         task_id: int,
         data: TaskAssignRequest,
         workspace_id: int | None = None,
+        actor_id: int | None = None,
     ) -> TaskResponse:
-        """Assign or reassign a task with a single, transaction-safe atomic operation."""
+        """Assign or reassign a task with a single, transaction-safe atomic operation.
+
+        All steps are staged before commit:
+        1. Task update (assignee_id, and status if requested)
+        2. TaskAssignmentHistory (created only if assignee changes)
+        3. Status change via TaskWorkflow (only if status changes): validates the move and
+           writes a TaskStatusHistory row plus a STATUS_CHANGED ActivityLog
+        4. ActivityLog (TASK_ASSIGNED / TASK_UNASSIGNED audit log of the assignment)
+        5. Notification (pending outbox notification for new assignee)
+
+        If any error or simulated failure occurs, the entire transaction rolls back.
+        """
+        # Lock the row so a concurrent status/assignee change cannot be validated against
+        # a stale read.
         task = await _get_task_or_404(db, task_id, workspace_id=workspace_id, for_update=True)
-        if data.assignee_id is not None:
-            await _get_user_or_404(db, data.assignee_id, "assignee_id")
-            await _verify_project_membership(db, data.assignee_id, task.project_id)
-        if data.assigned_by_id is not None:
-            await _get_user_or_404(db, data.assigned_by_id, "assigned_by_id")
+        assigned_by_id = actor_id if actor_id is not None else data.assigned_by_id
+
+        try:
+            if data.assignee_id is not None:
+                await _get_user_or_404(
+                    db, data.assignee_id, "assignee_id", workspace_id=task.workspace_id
+                )
+                await _verify_project_membership(db, data.assignee_id, task.project_id)
+            if assigned_by_id is not None:
+                await _get_user_or_404(
+                    db, assigned_by_id, "assigned_by_id", workspace_id=task.workspace_id
+                )
+        except Exception:
+            await db.rollback()  # release the row lock
+            raise
 
         try:
             previous_assignee_id = task.assignee_id
@@ -185,15 +227,13 @@ class TaskService:
             assignee_changed = data.assignee_id != previous_assignee_id
             status_changed = data.status is not None and data.status != previous_status
 
-            # If status changes, validate transition via TaskWorkflow
-            if status_changed and data.status is not None:
-                TaskWorkflow.transition_status(
-                    db, task, data.status, changed_by_id=data.assigned_by_id
-                )
-
             # 1. Update task fields in session
             if assignee_changed:
                 task.assignee_id = data.assignee_id
+            if status_changed and data.status is not None:
+                # Same rules and audit trail as PATCH /status: validates the move and writes
+                # the TaskStatusHistory row and a STATUS_CHANGED activity log.
+                TaskWorkflow.transition_status(db, task, data.status, changed_by_id=assigned_by_id)
 
             # 2. Assignment history record (only when assignee changed)
             if assignee_changed:
@@ -201,14 +241,14 @@ class TaskService:
                     task_id=task.id,
                     previous_assignee_id=previous_assignee_id,
                     new_assignee_id=data.assignee_id,
-                    assigned_by_id=data.assigned_by_id,
+                    assigned_by_id=assigned_by_id,
                 )
                 db.add(assignment_history)
 
-            # 3. Activity log record
+            # 3. Activity log record for the assignment itself
             action_name = "TASK_ASSIGNED" if data.assignee_id is not None else "TASK_UNASSIGNED"
             activity_log = ActivityLog(
-                actor_id=data.assigned_by_id,
+                actor_id=assigned_by_id,
                 entity_type="task",
                 entity_id=task.id,
                 action=action_name,
@@ -233,7 +273,7 @@ class TaskService:
                     payload={
                         "task_id": task.id,
                         "task_title": task.title,
-                        "assigned_by_id": data.assigned_by_id,
+                        "assigned_by_id": assigned_by_id,
                     },
                 )
                 db.add(notification)

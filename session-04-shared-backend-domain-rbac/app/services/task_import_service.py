@@ -52,7 +52,23 @@ class TaskImportService:
 
         # Check for existing import if idempotency key is provided
         if effective_key:
-            existing = await col.find_one({"idempotency_key": effective_key})
+            idempotency_filter: dict[str, Any]
+            if workspace_id == 1:
+                idempotency_filter = {
+                    "idempotency_key": effective_key,
+                    "$or": [
+                        {"workspace_id": 1},
+                        {"workspace_id": None},
+                        {"workspace_id": {"$exists": False}},
+                    ],
+                }
+            else:
+                idempotency_filter = {
+                    "workspace_id": workspace_id,
+                    "idempotency_key": effective_key,
+                }
+
+            existing = await col.find_one(idempotency_filter)
             if existing:
                 logger.info(
                     "Idempotent import match found for key %s (mongo_id: %s)",
@@ -70,7 +86,10 @@ class TaskImportService:
 
                 # Reconcile if MongoDB was left in PENDING but Postgres task was committed
                 if status_enum == ImportStatus.PENDING:
-                    stmt = select(Task).where(Task.mongo_import_id == str(existing["_id"]))
+                    stmt = select(Task).where(
+                        Task.mongo_import_id == str(existing["_id"]),
+                        Task.workspace_id == workspace_id,
+                    )
                     committed_task = (await db.execute(stmt)).scalar_one_or_none()
                     if committed_task is not None:
                         status_enum = ImportStatus.SUCCESS
@@ -121,21 +140,36 @@ class TaskImportService:
             mongo_id = insert_result.inserted_id
         except DuplicateKeyError:
             # Concurrent duplicate request with the same idempotency key
-            existing = await col.find_one({"idempotency_key": effective_key})
-            if existing:
-                raw_status = str(existing.get("status", ImportStatus.PENDING.value))
-                try:
-                    status_enum = ImportStatus(raw_status)
-                except ValueError:
-                    status_enum = ImportStatus.FAILED
-                return TaskImportResponse(
-                    import_id=str(existing["_id"]),
-                    status=status_enum,
-                    postgres_task_id=existing.get("postgres_task_id"),
-                    error_details=existing.get("error_details"),
-                    created_at=existing.get("created_at", datetime.now(UTC)),
-                    updated_at=existing.get("updated_at", datetime.now(UTC)),
-                )
+            if effective_key:
+                if workspace_id == 1:
+                    dup_filter: dict[str, Any] = {
+                        "idempotency_key": effective_key,
+                        "$or": [
+                            {"workspace_id": 1},
+                            {"workspace_id": None},
+                            {"workspace_id": {"$exists": False}},
+                        ],
+                    }
+                else:
+                    dup_filter = {
+                        "workspace_id": workspace_id,
+                        "idempotency_key": effective_key,
+                    }
+                existing = await col.find_one(dup_filter)
+                if existing:
+                    raw_status = str(existing.get("status", ImportStatus.PENDING.value))
+                    try:
+                        status_enum = ImportStatus(raw_status)
+                    except ValueError:
+                        status_enum = ImportStatus.FAILED
+                    return TaskImportResponse(
+                        import_id=str(existing["_id"]),
+                        status=status_enum,
+                        postgres_task_id=existing.get("postgres_task_id"),
+                        error_details=existing.get("error_details"),
+                        created_at=existing.get("created_at", datetime.now(UTC)),
+                        updated_at=existing.get("updated_at", datetime.now(UTC)),
+                    )
             raise
 
         import_id_str = str(mongo_id)
@@ -317,11 +351,10 @@ class TaskImportService:
             )
 
         doc = await col.find_one({"_id": ObjectId(import_id)})
-        if not doc or (
-            workspace_id is not None
-            and doc.get("workspace_id") is not None
-            and doc["workspace_id"] != workspace_id
-        ):
+        doc_ws = doc.get("workspace_id") if doc else None
+        if doc and doc_ws is None:
+            doc_ws = 1  # legacy records belong to default workspace 1
+        if not doc or (workspace_id is not None and doc_ws != workspace_id):
             raise NotFoundError(
                 "Import record not found",
                 details=[{"field": "import_id", "message": f"Import '{import_id}' not found"}],

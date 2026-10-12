@@ -79,7 +79,7 @@ def upgrade() -> None:
     # 4. Add workspace_id to project, backfill, and scope slug uniqueness per workspace
     op.add_column("project", sa.Column("workspace_id", sa.Integer(), nullable=True))
     op.execute("UPDATE project SET workspace_id = 1 WHERE workspace_id IS NULL")
-    op.alter_column("project", "workspace_id", nullable=False, server_default="1")
+    op.alter_column("project", "workspace_id", nullable=False)
     op.create_foreign_key(
         "fk_project_workspace_id",
         "project",
@@ -88,11 +88,11 @@ def upgrade() -> None:
         ["id"],
         ondelete="CASCADE",
     )
-    op.create_index("ix_project_workspace_id", "project", ["workspace_id"])
+    op.create_unique_constraint("uq_project_id_workspace_id", "project", ["id", "workspace_id"])
     op.drop_constraint("uq_project_slug", "project", type_="unique")
     op.create_unique_constraint("uq_project_workspace_slug", "project", ["workspace_id", "slug"])
 
-    # 5. Add workspace_id to task, backfill from parent project, and create composite index
+    # 5. Add workspace_id to task, backfill from parent project, and create composite index & FK
     op.add_column("task", sa.Column("workspace_id", sa.Integer(), nullable=True))
     op.execute(
         """
@@ -103,7 +103,7 @@ def upgrade() -> None:
         """
     )
     op.execute("UPDATE task SET workspace_id = 1 WHERE workspace_id IS NULL")
-    op.alter_column("task", "workspace_id", nullable=False, server_default="1")
+    op.alter_column("task", "workspace_id", nullable=False)
     op.create_foreign_key(
         "fk_task_workspace_id",
         "task",
@@ -112,7 +112,14 @@ def upgrade() -> None:
         ["id"],
         ondelete="CASCADE",
     )
-    op.create_index("ix_task_workspace_id", "task", ["workspace_id"])
+    op.create_foreign_key(
+        "fk_task_project_workspace",
+        "task",
+        "project",
+        ["project_id", "workspace_id"],
+        ["id", "workspace_id"],
+        ondelete="CASCADE",
+    )
     op.create_index(
         "ix_task_workspace_status_priority_id",
         "task",
@@ -131,13 +138,24 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_index("ix_task_workspace_status_priority_id", table_name="task")
-    op.drop_index("ix_task_workspace_id", table_name="task")
+    op.drop_constraint("fk_task_project_workspace", "task", type_="foreignkey")
     op.drop_constraint("fk_task_workspace_id", "task", type_="foreignkey")
     op.drop_column("task", "workspace_id")
 
     op.drop_constraint("uq_project_workspace_slug", "project", type_="unique")
+    op.execute(
+        """
+        UPDATE project
+        SET slug = slug || '-' || id
+        WHERE id NOT IN (
+            SELECT min_id FROM (
+                SELECT MIN(id) AS min_id FROM project GROUP BY slug
+            ) AS p_min
+        )
+        """
+    )
     op.create_unique_constraint("uq_project_slug", "project", ["slug"])
-    op.drop_index("ix_project_workspace_id", table_name="project")
+    op.drop_constraint("uq_project_id_workspace_id", "project", type_="unique")
     op.drop_constraint("fk_project_workspace_id", "project", type_="foreignkey")
     op.drop_column("project", "workspace_id")
 

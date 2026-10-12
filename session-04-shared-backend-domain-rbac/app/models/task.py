@@ -3,7 +3,17 @@
 from datetime import date
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Date, Enum, ForeignKey, Index, Integer, String, Text, desc
+from sqlalchemy import (
+    Date,
+    Enum,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    String,
+    Text,
+    desc,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin
@@ -18,16 +28,12 @@ if TYPE_CHECKING:
 class Task(Base, TimestampMixin):
     __tablename__ = "task"
     __table_args__ = (
-        # This index helps the task listing endpoint find tasks by status and priority
-        # and return them with the newest tasks first. PostgreSQL can use the index for
-        # both filtering and sorting, but it decides the best approach based on the data.
-        Index(
-            "ix_task_status_priority_id",
-            "status",
-            "priority",
-            desc("id"),
+        ForeignKeyConstraint(
+            ["project_id", "workspace_id"],
+            ["project.id", "project.workspace_id"],
+            name="fk_task_project_workspace",
+            ondelete="CASCADE",
         ),
-        Index("ix_task_workspace_id", "workspace_id"),
         Index(
             "ix_task_workspace_status_priority_id",
             "workspace_id",
@@ -69,6 +75,10 @@ class Task(Base, TimestampMixin):
     )
     mongo_import_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
-    workspace: Mapped["Workspace"] = relationship(back_populates="tasks")
-    project: Mapped["Project"] = relationship(back_populates="tasks")
+    workspace: Mapped["Workspace"] = relationship(back_populates="tasks", overlaps="project,tasks")
+    project: Mapped["Project"] = relationship(
+        back_populates="tasks",
+        foreign_keys="[Task.project_id, Task.workspace_id]",
+        overlaps="workspace,tasks",
+    )
     assignee: Mapped["User | None"] = relationship(back_populates="tasks")

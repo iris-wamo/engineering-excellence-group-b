@@ -53,6 +53,9 @@ async def get_current_workspace_id(
         except ValueError:
             raise InvalidWorkspaceHeaderError() from None
 
+        if user is None:
+            raise NotAuthenticatedError()
+
         workspace = await WorkspaceRepository.get_by_id(db, workspace_id)
         if workspace is None:
             raise NotFoundError(
@@ -64,9 +67,6 @@ async def get_current_workspace_id(
                     }
                 ],
             )
-
-        if user is None:
-            raise NotAuthenticatedError()
 
         is_member = await WorkspaceRepository.is_user_in_workspace(
             db, workspace_id=workspace_id, user_id=user.id
@@ -80,10 +80,7 @@ async def get_current_workspace_id(
     if user is not None:
         user_workspaces = await WorkspaceRepository.get_user_workspaces(db, user.id)
         if not user_workspaces:
-            ws1 = await WorkspaceRepository.get_by_id(db, 1)
-            if ws1 is not None:
-                await WorkspaceRepository.add_user_to_workspace(db, workspace_id=1, user_id=user.id)
-            return 1
+            raise ForbiddenError("You do not have permission to access any workspace")
 
         if any(ws.id == 1 for ws in user_workspaces):
             return 1

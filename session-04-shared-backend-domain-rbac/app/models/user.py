@@ -10,6 +10,7 @@ from app.db.base import Base, TimestampMixin
 if TYPE_CHECKING:
     from app.models.project_user import ProjectUser
     from app.models.task import Task
+    from app.models.workspace_user import WorkspaceUser
 
 
 class User(Base, TimestampMixin):
@@ -25,5 +26,8 @@ class User(Base, TimestampMixin):
 
     tasks: Mapped[list["Task"]] = relationship(back_populates="assignee")
     memberships: Mapped[list["ProjectUser"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+    workspace_memberships: Mapped[list["WorkspaceUser"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )

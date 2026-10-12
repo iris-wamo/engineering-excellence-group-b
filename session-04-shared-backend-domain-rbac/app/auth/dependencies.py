@@ -5,7 +5,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.security import decode_access_token
-from app.core.exceptions import NotAuthenticatedError
+from app.core.exceptions import AuthenticationError, NotAuthenticatedError
 from app.db.session import get_db
 from app.models.user import User
 from app.repositories.user_repository import UserRepository
@@ -33,3 +33,24 @@ async def get_current_user(
 
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
+
+
+async def get_optional_current_user(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
+) -> User | None:
+    """Read the Bearer token if present; return None if missing or invalid."""
+    if credentials is None:
+        return None
+    try:
+        user_id = decode_access_token(credentials.credentials)
+    except AuthenticationError:
+        return None
+
+    user = await UserRepository.get_by_id(db, user_id)
+    if user is None or not user.is_active:
+        return None
+    return user
+
+
+OptionalCurrentUser = Annotated[User | None, Depends(get_optional_current_user)]

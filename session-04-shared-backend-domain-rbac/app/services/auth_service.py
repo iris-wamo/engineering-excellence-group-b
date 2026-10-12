@@ -4,6 +4,7 @@ from app.auth.security import create_access_token, hash_password, verify_passwor
 from app.core.exceptions import InvalidCredentialsError
 from app.models.user import User
 from app.repositories.user_repository import UserRepository
+from app.repositories.workspace_repository import WorkspaceRepository
 from app.schemas.auth import LoginRequest, SignupRequest
 
 
@@ -11,12 +12,19 @@ class AuthService:
     @staticmethod
     async def signup(db: AsyncSession, payload: SignupRequest) -> User:
         """Register a new user, storing only the hash of their password."""
-        return await UserRepository.create(
+        user = await UserRepository.create(
             db,
             name=payload.name,
             email=str(payload.email),
             password_hash=hash_password(payload.password),
         )
+        # Automatically enroll user into default workspace 1 if it exists
+        ws = await WorkspaceRepository.get_by_id(db, 1)
+        if ws is not None:
+            await WorkspaceRepository.add_user_to_workspace(db, workspace_id=1, user_id=user.id)
+            await db.refresh(user)
+
+        return user
 
     @staticmethod
     async def login(db: AsyncSession, payload: LoginRequest) -> str:

@@ -16,11 +16,13 @@ from taskflow_shared.errors import (
     ErrorBody,
     ErrorDetail,
     ErrorResponse,
-    ForbiddenError,
     NotFoundError,
     UnauthorizedError,
     ValidationAppError,
     register_exception_handlers,
+)
+from taskflow_shared.errors import (
+    ForbiddenError as SharedForbiddenError,
 )
 
 
@@ -71,6 +73,20 @@ class NotAuthenticatedError(AuthenticationError):
 
     def __init__(self) -> None:
         super().__init__("Missing or invalid authentication credentials")
+
+
+class ForbiddenError(SharedForbiddenError):
+    """Raised when an authenticated user's role does not allow the requested action."""
+
+    code = "FORBIDDEN"
+    status_code = status.HTTP_403_FORBIDDEN
+
+    def __init__(
+        self,
+        message: str = "You do not have permission to perform this action",
+        details: list[dict[str, Any]] | None = None,
+    ) -> None:
+        super().__init__(message, details=details)
 
 
 class ProjectMembershipRequiredError(AppError):

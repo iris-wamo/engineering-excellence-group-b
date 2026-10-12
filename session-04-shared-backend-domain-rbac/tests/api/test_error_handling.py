@@ -29,11 +29,14 @@ async def test_method_not_allowed_returns_adr001_envelope(client: AsyncClient) -
     assert HEADER_REQUEST_ID in response.headers
 
 
-async def test_app_level_validation_error_envelope(client: AsyncClient) -> None:
+async def test_app_level_validation_error_envelope(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
     """Verify app-level validation errors format into standard ADR-001 envelope with fields."""
     response = await client.post(
         "/api/v1/users",
         json={"email": "not-an-email", "full_name": ""},
+        headers=admin_headers,
     )
 
     assert response.status_code == 422

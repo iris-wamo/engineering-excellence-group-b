@@ -1,7 +1,8 @@
 """Application settings loaded from the environment."""
 
-from pydantic import MongoDsn, PostgresDsn
+from pydantic import MongoDsn, PostgresDsn, model_validator
 from taskflow_shared.config import BaseAppSettings
+from taskflow_shared.enums.common import Environment
 
 
 class Settings(BaseAppSettings):
@@ -15,6 +16,20 @@ class Settings(BaseAppSettings):
     jwt_secret_key: str = "dev-only-secret-change-in-production"
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 15
+
+    # Multi-tenancy fallback for unauthenticated requests
+    allow_anonymous_default_workspace: bool = True
+
+    @model_validator(mode="after")
+    def validate_jwt_secret_key(self) -> "Settings":
+        if (
+            self.environment not in (Environment.DEVELOPMENT, Environment.TESTING)
+            and self.jwt_secret_key == "dev-only-secret-change-in-production"
+        ):
+            raise ValueError(
+                "jwt_secret_key must be configured via environment variable outside dev/test"
+            )
+        return self
 
 
 settings = Settings()

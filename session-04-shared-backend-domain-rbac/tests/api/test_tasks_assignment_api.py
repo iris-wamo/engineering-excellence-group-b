@@ -1,5 +1,7 @@
 """API tests for the /tasks/{id}/assign endpoint."""
 
+from collections.abc import Awaitable, Callable
+
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,22 +15,22 @@ from app.schemas.user import UserCreate
 from app.services.project_service import ProjectService
 from app.services.task_service import TaskService
 from app.services.user_service import UserService
+from tests.conftest import AuthedUser
+
+MakeUser = Callable[..., Awaitable[AuthedUser]]
 
 
-async def test_api_assign_task_success(client: AsyncClient, db_session: AsyncSession) -> None:
-    creator = await UserService.create_user(
-        db_session, UserCreate(name="Lead", email="lead@example.com")
-    )
+async def test_api_assign_task_success(
+    client: AsyncClient, db_session: AsyncSession, make_user: MakeUser
+) -> None:
+    project = await ProjectService.create_project(db_session, ProjectCreate(name="Payments"))
+    # The caller needs a role that may assign work in this project; make_user signs them
+    # up so they can also log in and carry a token.
+    creator = await make_user("lead@example.com", ProjectRole.owner, project_id=project.id)
     assignee = await UserService.create_user(
         db_session, UserCreate(name="Engineer", email="engineer@example.com")
     )
-    project = await ProjectService.create_project(db_session, ProjectCreate(name="Payments"))
-    db_session.add_all(
-        [
-            ProjectUser(project_id=project.id, user_id=creator.id, role=ProjectRole.owner),
-            ProjectUser(project_id=project.id, user_id=assignee.id, role=ProjectRole.member),
-        ]
-    )
+    db_session.add(ProjectUser(project_id=project.id, user_id=assignee.id, role=ProjectRole.member))
     await db_session.commit()
 
     task = await TaskService.create_task(
@@ -43,6 +45,7 @@ async def test_api_assign_task_success(client: AsyncClient, db_session: AsyncSes
             "assigned_by_id": creator.id,
             "status": "in_progress",
         },
+        headers=creator.headers,
     )
 
     assert response.status_code == 200
@@ -53,14 +56,10 @@ async def test_api_assign_task_success(client: AsyncClient, db_session: AsyncSes
 
 
 async def test_api_assign_status_change_is_logged_as_status_changed(
-    client: AsyncClient, db_session: AsyncSession
+    client: AsyncClient, db_session: AsyncSession, make_user: MakeUser
 ) -> None:
-    creator = await UserService.create_user(
-        db_session, UserCreate(name="Lead", email="lead3@example.com")
-    )
     project = await ProjectService.create_project(db_session, ProjectCreate(name="Audit"))
-    db_session.add(ProjectUser(project_id=project.id, user_id=creator.id, role=ProjectRole.owner))
-    await db_session.commit()
+    creator = await make_user("lead3@example.com", ProjectRole.owner, project_id=project.id)
     task = await TaskService.create_task(
         db_session, TaskCreate(title="Audited", project_id=project.id)
     )
@@ -69,6 +68,7 @@ async def test_api_assign_status_change_is_logged_as_status_changed(
     response = await client.post(
         f"/api/v1/tasks/{task.id}/assign",
         json={"assignee_id": None, "assigned_by_id": creator.id, "status": "in_progress"},
+        headers=creator.headers,
     )
 
     assert response.status_code == 200
@@ -83,21 +83,14 @@ async def test_api_assign_status_change_is_logged_as_status_changed(
 
 
 async def test_api_assign_task_rejects_invalid_status_transition(
-    client: AsyncClient, db_session: AsyncSession
+    client: AsyncClient, db_session: AsyncSession, make_user: MakeUser
 ) -> None:
-    creator = await UserService.create_user(
-        db_session, UserCreate(name="Lead", email="lead2@example.com")
-    )
+    project = await ProjectService.create_project(db_session, ProjectCreate(name="Billing"))
+    creator = await make_user("lead2@example.com", ProjectRole.owner, project_id=project.id)
     assignee = await UserService.create_user(
         db_session, UserCreate(name="Engineer", email="engineer2@example.com")
     )
-    project = await ProjectService.create_project(db_session, ProjectCreate(name="Billing"))
-    db_session.add_all(
-        [
-            ProjectUser(project_id=project.id, user_id=creator.id, role=ProjectRole.owner),
-            ProjectUser(project_id=project.id, user_id=assignee.id, role=ProjectRole.member),
-        ]
-    )
+    db_session.add(ProjectUser(project_id=project.id, user_id=assignee.id, role=ProjectRole.member))
     await db_session.commit()
     task = await TaskService.create_task(
         db_session, TaskCreate(title="Invoices", project_id=project.id)
@@ -107,6 +100,7 @@ async def test_api_assign_task_rejects_invalid_status_transition(
     response = await client.post(
         f"/api/v1/tasks/{task.id}/assign",
         json={"assignee_id": assignee.id, "assigned_by_id": creator.id, "status": "done"},
+        headers=creator.headers,
     )
 
     assert response.status_code == 400
@@ -119,21 +113,14 @@ async def test_api_assign_task_rejects_invalid_status_transition(
 
 
 async def test_api_assign_task_failure_rollback(
-    client: AsyncClient, db_session: AsyncSession
+    client: AsyncClient, db_session: AsyncSession, make_user: MakeUser
 ) -> None:
-    creator = await UserService.create_user(
-        db_session, UserCreate(name="Lead2", email="lead2@example.com")
-    )
+    project = await ProjectService.create_project(db_session, ProjectCreate(name="Auth"))
+    creator = await make_user("lead2@example.com", ProjectRole.owner, project_id=project.id)
     assignee = await UserService.create_user(
         db_session, UserCreate(name="Engineer2", email="engineer2@example.com")
     )
-    project = await ProjectService.create_project(db_session, ProjectCreate(name="Auth"))
-    db_session.add_all(
-        [
-            ProjectUser(project_id=project.id, user_id=creator.id, role=ProjectRole.owner),
-            ProjectUser(project_id=project.id, user_id=assignee.id, role=ProjectRole.member),
-        ]
-    )
+    db_session.add(ProjectUser(project_id=project.id, user_id=assignee.id, role=ProjectRole.member))
     await db_session.commit()
 
     task = await TaskService.create_task(
@@ -148,6 +135,7 @@ async def test_api_assign_task_failure_rollback(
             "assigned_by_id": creator.id,
             "simulate_failure": True,
         },
+        headers=creator.headers,
     )
 
     # Handled by handle_app_error with code SIMULATED_TRANSACTION_FAILURE
@@ -162,18 +150,13 @@ async def test_api_assign_task_failure_rollback(
 
 
 async def test_api_assign_task_non_member_returns_400(
-    client: AsyncClient, db_session: AsyncSession
+    client: AsyncClient, db_session: AsyncSession, make_user: MakeUser
 ) -> None:
-    creator = await UserService.create_user(
-        db_session, UserCreate(name="Lead3", email="lead3@example.com")
-    )
+    project = await ProjectService.create_project(db_session, ProjectCreate(name="Billing"))
+    creator = await make_user("lead3@example.com", ProjectRole.owner, project_id=project.id)
     outsider = await UserService.create_user(
         db_session, UserCreate(name="Outsider", email="outsider@example.com")
     )
-    project = await ProjectService.create_project(db_session, ProjectCreate(name="Billing"))
-    # Only creator is a member of Billing project
-    db_session.add(ProjectUser(project_id=project.id, user_id=creator.id, role=ProjectRole.owner))
-    await db_session.commit()
 
     task = await TaskService.create_task(
         db_session,
@@ -186,6 +169,7 @@ async def test_api_assign_task_non_member_returns_400(
             "assignee_id": outsider.id,
             "assigned_by_id": creator.id,
         },
+        headers=creator.headers,
     )
 
     assert response.status_code == 400

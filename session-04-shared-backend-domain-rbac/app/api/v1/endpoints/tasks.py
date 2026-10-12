@@ -6,8 +6,15 @@ from fastapi import APIRouter, Depends, Header, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from taskflow_shared.enums import ImportStatus
 
+from app.auth.permissions import (
+    Permission,
+    require_task_assignee,
+    require_task_permission,
+)
+from app.auth.workspace_context import CurrentWorkspaceId
 from app.db.session import get_db
 from app.models.enums import TaskPriority, TaskStatus
+from app.models.user import User
 from app.schemas.task import (
     TaskAssignRequest,
     TaskCreate,
@@ -32,9 +39,10 @@ router = APIRouter(prefix="/tasks", tags=["tasks"])
 async def create_task(
     payload: TaskCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
+    workspace_id: CurrentWorkspaceId,
 ) -> TaskResponse:
-    """Create a new task."""
-    return await TaskService.create_task(db, payload)
+    """Create a new task within the active workspace."""
+    return await TaskService.create_task(db, payload, workspace_id=workspace_id)
 
 
 @router.post(
@@ -55,12 +63,13 @@ async def create_task(
 async def import_raw_task(
     payload: TaskRawImportRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
+    workspace_id: CurrentWorkspaceId,
     response: Response,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> TaskImportResponse:
     """Ingest raw task data into MongoDB first, then attempt normalization into PostgreSQL."""
     res = await TaskImportService.import_raw_task(
-        db, payload.raw_payload, idempotency_key=idempotency_key
+        db, payload.raw_payload, idempotency_key=idempotency_key, workspace_id=workspace_id
     )
     if res.status == ImportStatus.FAILED:
         response.status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
@@ -75,10 +84,11 @@ async def import_raw_task(
 async def import_raw_tasks_batch(
     payload: TaskBatchImportRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
+    workspace_id: CurrentWorkspaceId,
 ) -> TaskBatchImportResponse:
     """Ingest multiple raw task payloads in batch into MongoDB and normalize to PostgreSQL."""
     total, succeeded, failed, results = await TaskImportService.import_raw_tasks_batch(
-        db, [item.raw_payload for item in payload.items]
+        db, [item.raw_payload for item in payload.items], workspace_id=workspace_id
     )
     return TaskBatchImportResponse(
         total=total,
@@ -89,14 +99,18 @@ async def import_raw_tasks_batch(
 
 
 @router.get("/import/{import_id}", response_model=TaskImportDetailResponse)
-async def get_raw_task_import(import_id: str) -> TaskImportDetailResponse:
+async def get_raw_task_import(
+    import_id: str,
+    workspace_id: CurrentWorkspaceId,
+) -> TaskImportDetailResponse:
     """Retrieve raw task import details and current processing status from MongoDB."""
-    return await TaskImportService.get_import_by_id(import_id)
+    return await TaskImportService.get_import_by_id(import_id, workspace_id=workspace_id)
 
 
 @router.get("", response_model=TaskListResponse)
 async def list_tasks(
     db: Annotated[AsyncSession, Depends(get_db)],
+    workspace_id: CurrentWorkspaceId,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=10, ge=1, le=100),
     status: TaskStatus | None = None,
@@ -104,7 +118,7 @@ async def list_tasks(
     project_id: int | None = None,
     assignee_id: int | None = None,
 ) -> TaskListResponse:
-    """List tasks, paginated and optionally filtered."""
+    """List tasks, paginated and optionally filtered within the active workspace."""
     return await TaskService.list_tasks(
         db,
         page=page,
@@ -113,30 +127,57 @@ async def list_tasks(
         priority=priority,
         project_id=project_id,
         assignee_id=assignee_id,
+        workspace_id=workspace_id,
     )
 
 
 @router.get("/{task_id}", response_model=TaskResponse)
-async def get_task(task_id: int, db: Annotated[AsyncSession, Depends(get_db)]) -> TaskResponse:
-    """Retrieve a task by ID."""
-    return await TaskService.get_task(db, task_id)
+async def get_task(
+    task_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    workspace_id: CurrentWorkspaceId,
+) -> TaskResponse:
+    """Retrieve a task by ID within the active workspace."""
+    return await TaskService.get_task(db, task_id, workspace_id=workspace_id)
 
 
-@router.patch("/{task_id}/status", response_model=TaskResponse)
+@router.patch(
+    "/{task_id}/status",
+    response_model=TaskResponse,
+)
 async def update_task_status(
     task_id: int,
     payload: TaskStatusUpdate,
     db: Annotated[AsyncSession, Depends(get_db)],
+    workspace_id: CurrentWorkspaceId,
+    current_user: Annotated[User, Depends(require_task_assignee)],
 ) -> TaskResponse:
-    """Update the status of an existing task."""
-    return await TaskService.update_task_status(db, task_id, payload)
+    """Update the status of an existing task. Only the task's assignee may do this."""
+    return await TaskService.update_task_status(
+        db,
+        task_id,
+        payload,
+        workspace_id=workspace_id,
+        changed_by_id=current_user.id,
+    )
 
 
-@router.post("/{task_id}/assign", response_model=TaskResponse)
+@router.post(
+    "/{task_id}/assign",
+    response_model=TaskResponse,
+)
 async def assign_task(
     task_id: int,
     payload: TaskAssignRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
+    workspace_id: CurrentWorkspaceId,
+    current_user: Annotated[User, Depends(require_task_permission(Permission.task_assign))],
 ) -> TaskResponse:
-    """Assign or reassign a task in a transaction-safe manner."""
-    return await TaskService.assign_task(db, task_id, payload)
+    """Assign or reassign a task. Requires admin, manager, or owner in the task's project."""
+    return await TaskService.assign_task(
+        db,
+        task_id,
+        payload,
+        workspace_id=workspace_id,
+        actor_id=current_user.id,
+    )

@@ -1,86 +1,38 @@
+from collections.abc import Awaitable, Callable
+
 from httpx import AsyncClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.activity_log import ActivityLog
-from app.models.enums import TaskStatus
+from app.models.enums import ProjectRole, TaskStatus
 from app.models.task_status_history import TaskStatusHistory
+from tests.conftest import AuthedUser
+
+MakeUser = Callable[..., Awaitable[AuthedUser]]
 
 
-async def test_valid_task_transitions(client: AsyncClient) -> None:
-    # 1. Create project & task
-    project_resp = await client.post("/api/v1/projects", json={"name": "Workflow Project"})
+async def _create_workflow_context(
+    client: AsyncClient,
+    admin_headers: dict[str, str],
+    make_user: MakeUser,
+    name: str,
+) -> tuple[int, AuthedUser]:
+    slug_name = name.lower().replace(" ", "_")
+    project_resp = await client.post("/api/v1/projects", json={"name": name}, headers=admin_headers)
     project_id = project_resp.json()["id"]
-    task_id = (
-        await client.post(
-            "/api/v1/tasks",
-            json={"title": "Workflow Task", "project_id": project_id},
-        )
-    ).json()["id"]
-
-    # todo -> in_progress
-    resp = await client.patch(f"/api/v1/tasks/{task_id}/status", json={"status": "in_progress"})
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "in_progress"
-
-    # in_progress -> review
-    resp = await client.patch(f"/api/v1/tasks/{task_id}/status", json={"status": "review"})
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "review"
-
-    # review -> done
-    resp = await client.patch(f"/api/v1/tasks/{task_id}/status", json={"status": "done"})
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "done"
+    user = await make_user(f"{slug_name}@example.com", ProjectRole.member, project_id=project_id)
+    resp = await client.post(
+        "/api/v1/tasks",
+        json={"title": name, "project_id": project_id, "assignee_id": user.id},
+    )
+    return int(resp.json()["id"]), user
 
 
-async def test_reverse_task_transition_is_allowed(client: AsyncClient) -> None:
-    project_resp = await client.post("/api/v1/projects", json={"name": "Workflow Project 2"})
-    project_id = project_resp.json()["id"]
-    task_id = (
-        await client.post(
-            "/api/v1/tasks",
-            json={"title": "Reverse Workflow Task", "project_id": project_id},
-        )
-    ).json()["id"]
-
-    resp = await client.patch(f"/api/v1/tasks/{task_id}/status", json={"status": "in_progress"})
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "in_progress"
-
-    resp = await client.patch(f"/api/v1/tasks/{task_id}/status", json={"status": "todo"})
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "todo"
-
-
-async def test_invalid_task_transition(client: AsyncClient) -> None:
-    # 1. Create project & task
-    project_resp = await client.post("/api/v1/projects", json={"name": "Workflow Project 3"})
-    project_id = project_resp.json()["id"]
-    task_id = (
-        await client.post(
-            "/api/v1/tasks",
-            json={"title": "Workflow Task 3", "project_id": project_id},
-        )
-    ).json()["id"]
-
-    # todo -> done (invalid)
-    resp = await client.patch(f"/api/v1/tasks/{task_id}/status", json={"status": "done"})
-    assert resp.status_code == 400
-
-    body = resp.json()
-    assert "error" in body
-    assert body["error"]["code"] == "INVALID_STATUS_TRANSITION"
-
-
-async def _create_task(client: AsyncClient, name: str) -> int:
-    project_id = (await client.post("/api/v1/projects", json={"name": name})).json()["id"]
-    resp = await client.post("/api/v1/tasks", json={"title": name, "project_id": project_id})
-    return int(resp.json()["id"])
-
-
-async def _move(client: AsyncClient, task_id: int, status: str) -> int:
-    resp = await client.patch(f"/api/v1/tasks/{task_id}/status", json={"status": status})
+async def _move(client: AsyncClient, task_id: int, status: str, headers: dict[str, str]) -> int:
+    resp = await client.patch(
+        f"/api/v1/tasks/{task_id}/status", json={"status": status}, headers=headers
+    )
     return resp.status_code
 
 
@@ -104,13 +56,95 @@ async def _activity_count(db: AsyncSession, task_id: int) -> int:
     )
 
 
-async def test_valid_move_writes_history_and_activity_rows(
-    client: AsyncClient, db_session: AsyncSession
+async def test_valid_task_transitions(
+    client: AsyncClient, admin_headers: dict[str, str], make_user: MakeUser
 ) -> None:
-    task_id = await _create_task(client, "Audit Trail")
+    task_id, user = await _create_workflow_context(
+        client, admin_headers, make_user, "Workflow Project 1"
+    )
+
+    # todo -> in_progress
+    resp = await client.patch(
+        f"/api/v1/tasks/{task_id}/status",
+        json={"status": "in_progress"},
+        headers=user.headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "in_progress"
+
+    # in_progress -> review
+    resp = await client.patch(
+        f"/api/v1/tasks/{task_id}/status",
+        json={"status": "review"},
+        headers=user.headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "review"
+
+    # review -> done
+    resp = await client.patch(
+        f"/api/v1/tasks/{task_id}/status",
+        json={"status": "done"},
+        headers=user.headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "done"
+
+
+async def test_reverse_task_transition_is_allowed(
+    client: AsyncClient, admin_headers: dict[str, str], make_user: MakeUser
+) -> None:
+    task_id, user = await _create_workflow_context(
+        client, admin_headers, make_user, "Workflow Project 2"
+    )
+
+    resp = await client.patch(
+        f"/api/v1/tasks/{task_id}/status",
+        json={"status": "in_progress"},
+        headers=user.headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "in_progress"
+
+    resp = await client.patch(
+        f"/api/v1/tasks/{task_id}/status",
+        json={"status": "todo"},
+        headers=user.headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "todo"
+
+
+async def test_invalid_task_transition(
+    client: AsyncClient, admin_headers: dict[str, str], make_user: MakeUser
+) -> None:
+    task_id, user = await _create_workflow_context(
+        client, admin_headers, make_user, "Workflow Project 3"
+    )
+
+    # todo -> done (invalid)
+    resp = await client.patch(
+        f"/api/v1/tasks/{task_id}/status",
+        json={"status": "done"},
+        headers=user.headers,
+    )
+    assert resp.status_code == 400
+
+    body = resp.json()
+    assert "error" in body
+    assert body["error"]["code"] == "INVALID_STATUS_TRANSITION"
+
+
+async def test_valid_move_writes_history_and_activity_rows(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    admin_headers: dict[str, str],
+    make_user: MakeUser,
+) -> None:
+    task_id, user = await _create_workflow_context(client, admin_headers, make_user, "Audit Trail")
 
     for status in ("in_progress", "review", "in_progress", "review", "done"):
-        assert await _move(client, task_id, status) == 200
+        assert await _move(client, task_id, status, user.headers) == 200
 
     assert await _history_rows(db_session, task_id) == [
         (TaskStatus.todo, TaskStatus.in_progress),
@@ -131,24 +165,36 @@ async def test_valid_move_writes_history_and_activity_rows(
     assert logs[-1].details == {"previous_status": "review", "new_status": "done"}
 
 
-async def test_rejected_move_writes_nothing(client: AsyncClient, db_session: AsyncSession) -> None:
-    task_id = await _create_task(client, "Rejected Move")
+async def test_rejected_move_writes_nothing(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    admin_headers: dict[str, str],
+    make_user: MakeUser,
+) -> None:
+    task_id, user = await _create_workflow_context(
+        client, admin_headers, make_user, "Rejected Move"
+    )
 
-    assert await _move(client, task_id, "done") == 400
+    assert await _move(client, task_id, "done", user.headers) == 400
 
     assert await _history_rows(db_session, task_id) == []
     assert await _activity_count(db_session, task_id) == 0
     assert (await client.get(f"/api/v1/tasks/{task_id}")).json()["status"] == "todo"
 
 
-async def test_reopen_and_rework_paths(client: AsyncClient, db_session: AsyncSession) -> None:
-    task_id = await _create_task(client, "Reopen")
+async def test_reopen_and_rework_paths(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    admin_headers: dict[str, str],
+    make_user: MakeUser,
+) -> None:
+    task_id, user = await _create_workflow_context(client, admin_headers, make_user, "Reopen")
     for status in ("in_progress", "review", "done"):
-        assert await _move(client, task_id, status) == 200
+        assert await _move(client, task_id, status, user.headers) == 200
 
     # done -> review (reopen) and review -> in_progress (rework)
-    assert await _move(client, task_id, "review") == 200
-    assert await _move(client, task_id, "in_progress") == 200
+    assert await _move(client, task_id, "review", user.headers) == 200
+    assert await _move(client, task_id, "in_progress", user.headers) == 200
 
     history = await _history_rows(db_session, task_id)
     assert history[-2:] == [
@@ -157,26 +203,40 @@ async def test_reopen_and_rework_paths(client: AsyncClient, db_session: AsyncSes
     ]
 
 
-async def test_skipping_steps_is_rejected(client: AsyncClient, db_session: AsyncSession) -> None:
-    task_id = await _create_task(client, "Skips")
-    assert await _move(client, task_id, "in_progress") == 200
-    assert await _move(client, task_id, "done") == 400  # in_progress -> done
-    assert await _move(client, task_id, "review") == 200
-    assert await _move(client, task_id, "todo") == 400  # review -> todo
-    assert await _move(client, task_id, "done") == 200
-    assert await _move(client, task_id, "todo") == 400  # done -> todo
-    assert await _move(client, task_id, "in_progress") == 400  # done -> in_progress
+async def test_skipping_steps_is_rejected(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    admin_headers: dict[str, str],
+    make_user: MakeUser,
+) -> None:
+    task_id, user = await _create_workflow_context(client, admin_headers, make_user, "Skips")
+    assert await _move(client, task_id, "in_progress", user.headers) == 200
+    assert await _move(client, task_id, "done", user.headers) == 400  # in_progress -> done
+    assert await _move(client, task_id, "review", user.headers) == 200
+    assert await _move(client, task_id, "todo", user.headers) == 400  # review -> todo
+    assert await _move(client, task_id, "done", user.headers) == 200
+    assert await _move(client, task_id, "todo", user.headers) == 400  # done -> todo
+    assert await _move(client, task_id, "in_progress", user.headers) == 400  # done -> in_progress
 
     # Only the 3 successful moves were recorded
     assert len(await _history_rows(db_session, task_id)) == 3
 
 
-async def test_same_status_is_a_noop(client: AsyncClient, db_session: AsyncSession) -> None:
-    task_id = await _create_task(client, "Idempotent")
-    assert await _move(client, task_id, "in_progress") == 200
+async def test_same_status_is_a_noop(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    admin_headers: dict[str, str],
+    make_user: MakeUser,
+) -> None:
+    task_id, user = await _create_workflow_context(client, admin_headers, make_user, "Idempotent")
+    assert await _move(client, task_id, "in_progress", user.headers) == 200
     before = await _activity_count(db_session, task_id)
 
-    resp = await client.patch(f"/api/v1/tasks/{task_id}/status", json={"status": "in_progress"})
+    resp = await client.patch(
+        f"/api/v1/tasks/{task_id}/status",
+        json={"status": "in_progress"},
+        headers=user.headers,
+    )
 
     assert resp.status_code == 200
     assert resp.json()["status"] == "in_progress"

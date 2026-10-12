@@ -53,6 +53,7 @@ testpaths = ["tests", "packages/taskflow_shared/tests"]
 asyncio_mode = "auto"
 
 [tool.mypy]
+mypy_path = ["packages/taskflow_shared"]
 python_version = "3.12"
 plugins = ["pydantic.mypy"]
 

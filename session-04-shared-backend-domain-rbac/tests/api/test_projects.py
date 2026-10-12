@@ -1,8 +1,14 @@
 from httpx import AsyncClient
 
 
-async def test_create_project_returns_201_and_payload(client: AsyncClient) -> None:
-    response = await client.post("/api/v1/projects", json={"name": "Alpha", "description": "First"})
+async def test_create_project_returns_201_and_payload(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    response = await client.post(
+        "/api/v1/projects",
+        json={"name": "Alpha", "description": "First"},
+        headers=admin_headers,
+    )
 
     assert response.status_code == 201
     body = response.json()
@@ -11,28 +17,36 @@ async def test_create_project_returns_201_and_payload(client: AsyncClient) -> No
     assert body["id"] is not None
 
 
-async def test_create_project_rejects_blank_name(client: AsyncClient) -> None:
-    response = await client.post("/api/v1/projects", json={"name": "   "})
+async def test_create_project_rejects_blank_name(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    response = await client.post("/api/v1/projects", json={"name": "   "}, headers=admin_headers)
 
     assert response.status_code == 422
 
 
-async def test_list_projects_returns_paginated_envelope(client: AsyncClient) -> None:
-    await client.post("/api/v1/projects", json={"name": "Alpha"})
-    await client.post("/api/v1/projects", json={"name": "Beta"})
+async def test_list_projects_returns_paginated_envelope(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    await client.post("/api/v1/projects", json={"name": "Alpha"}, headers=admin_headers)
+    await client.post("/api/v1/projects", json={"name": "Beta"}, headers=admin_headers)
 
     response = await client.get("/api/v1/projects?page=1&page_size=1")
 
     assert response.status_code == 200
     body = response.json()
-    assert body["total"] == 2
+    assert body["total"] == 3
     assert body["page"] == 1
     assert body["page_size"] == 1
     assert len(body["items"]) == 1
 
 
-async def test_get_project_returns_created_project_by_id(client: AsyncClient) -> None:
-    created = (await client.post("/api/v1/projects", json={"name": "Alpha"})).json()
+async def test_get_project_returns_created_project_by_id(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    created = (
+        await client.post("/api/v1/projects", json={"name": "Alpha"}, headers=admin_headers)
+    ).json()
 
     response = await client.get(f"/api/v1/projects/{created['id']}")
 

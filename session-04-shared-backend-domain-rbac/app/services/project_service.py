@@ -17,15 +17,23 @@ def _slugify(name: str) -> str:
 
 class ProjectService:
     @staticmethod
-    async def create_project(db: AsyncSession, payload: ProjectCreate) -> Project:
+    async def create_project(
+        db: AsyncSession, payload: ProjectCreate, workspace_id: int = 1
+    ) -> Project:
         slug = _slugify(payload.name)
         return await ProjectRepository.create(
-            db, name=payload.name, slug=slug, description=payload.description
+            db,
+            name=payload.name,
+            slug=slug,
+            description=payload.description,
+            workspace_id=workspace_id,
         )
 
     @staticmethod
-    async def get_project(db: AsyncSession, project_id: int) -> Project:
-        project = await ProjectRepository.get_by_id(db, project_id)
+    async def get_project(
+        db: AsyncSession, project_id: int, workspace_id: int | None = None
+    ) -> Project:
+        project = await ProjectRepository.get_by_id(db, project_id, workspace_id=workspace_id)
         if project is None:
             raise NotFoundError(
                 "Project not found",
@@ -43,6 +51,7 @@ class ProjectService:
         search: str | None,
         sort_by: str,
         sort_order: str,
+        workspace_id: int | None = None,
     ) -> tuple[list[Project], int]:
         offset = (page - 1) * page_size
         return await ProjectRepository.get_all(
@@ -52,4 +61,5 @@ class ProjectService:
             search=search,
             sort_by=sort_by,
             sort_order=sort_order,
+            workspace_id=workspace_id,
         )

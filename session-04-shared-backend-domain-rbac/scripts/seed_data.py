@@ -1,6 +1,7 @@
 """Database seeding script for local development and query performance benchmarking.
 
-Generates realistic seed data for users, projects, project memberships, and tasks.
+Generates realistic seed data for workspaces, users, workspace memberships, projects,
+project memberships, and tasks.
 Supports clean table reset and batch insertion for high performance.
 """
 
@@ -16,9 +17,12 @@ from typing import Any
 from sqlalchemy import func, insert, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
+from app.auth.security import hash_password
 from app.core.config import settings
-from app.models import Project, ProjectUser, Task, User
+from app.models import Project, ProjectUser, Task, User, Workspace, WorkspaceUser
 from app.models.enums import ProjectRole, TaskPriority, TaskStatus
+
+DEFAULT_PASSWORD_HASH = hash_password("password123")
 
 # Sample data generators
 FIRST_NAMES = [
@@ -98,22 +102,46 @@ TASK_VERBS = [
 ]
 
 TASK_NOUNS = [
-    "user authentication endpoint",
-    "database connection pooling",
-    "composite index on task table",
-    "transaction rollback handler",
-    "Alembic migration script",
-    "MongoDB raw payload logger",
-    "ORM N+1 query optimization",
-    "deadlock prevention logic",
-    "API response caching",
-    "rate limiting middleware",
+    "user authentication",
+    "database indexing",
+    "REST endpoints",
+    "transaction rollback",
     "Docker compose setup",
-    "Makefile test commands",
-    "seed script performance",
-    "JSON validation schema",
+    "pagination logic",
+    "error handling",
+    "query performance",
+    "seed script",
+    "foreign key constraints",
+    "slug generation",
+    "migration script",
+    "input validation",
+    "response caching",
     "health check endpoint",
 ]
+
+WORKSPACE_NAMES = [
+    ("Acme Corp", "acme-corp", "Primary enterprise workspace for Acme Corp engineering teams."),
+    (
+        "Globex Corporation",
+        "globex-corp",
+        "International multi-tenant workspace for Globex Corporation.",
+    ),
+    ("Initech Systems", "initech-systems", "Technology operations workspace for Initech Systems."),
+    ("Umbrella Research", "umbrella-research", "Advanced R&D team workspace for Umbrella Labs."),
+]
+
+
+def generate_workspaces(count: int) -> list[dict[str, Any]]:
+    workspaces = []
+    for i in range(1, count + 1):
+        if i <= len(WORKSPACE_NAMES):
+            name, slug, desc = WORKSPACE_NAMES[i - 1]
+        else:
+            name = f"Workspace Organization {i}"
+            slug = f"workspace-org-{i}"
+            desc = f"Organization tenant workspace #{i}."
+        workspaces.append({"name": name, "slug": slug, "description": desc})
+    return workspaces
 
 
 def generate_users(count: int) -> list[dict[str, Any]]:
@@ -125,13 +153,32 @@ def generate_users(count: int) -> list[dict[str, Any]]:
             {
                 "name": f"{fn} {ln}",
                 "email": f"{fn.lower()}.{ln.lower()}{i}@example.com",
+                "password_hash": DEFAULT_PASSWORD_HASH,
                 "is_active": True,
             }
         )
     return users
 
 
-def generate_projects(count: int) -> list[dict[str, Any]]:
+def generate_workspace_users(user_ids: list[int], workspace_ids: list[int]) -> list[dict[str, Any]]:
+    memberships = []
+    seen = set()
+    for user_id in user_ids:
+        # Each user belongs to at least 1 workspace
+        primary_ws = random.choice(workspace_ids)
+        memberships.append({"workspace_id": primary_ws, "user_id": user_id})
+        seen.add((primary_ws, user_id))
+
+        # Some users (e.g. 30%) belong to a second workspace for cross-tenant testing
+        if len(workspace_ids) > 1 and random.random() < 0.30:
+            other_ws = random.choice([ws for ws in workspace_ids if ws != primary_ws])
+            if (other_ws, user_id) not in seen:
+                memberships.append({"workspace_id": other_ws, "user_id": user_id})
+                seen.add((other_ws, user_id))
+    return memberships
+
+
+def generate_projects(count: int, workspace_ids: list[int]) -> list[dict[str, Any]]:
     projects = []
     for i in range(1, count + 1):
         base_name = PROJECT_NAMES[(i - 1) % len(PROJECT_NAMES)]
@@ -142,6 +189,7 @@ def generate_projects(count: int) -> list[dict[str, Any]]:
                 "name": name,
                 "slug": slug,
                 "description": f"Engineering initiative focused on {name.lower()}.",
+                "workspace_id": random.choice(workspace_ids),
             }
         )
     return projects
@@ -175,10 +223,13 @@ def generate_project_users(user_ids: list[int], project_ids: list[int]) -> list[
     return memberships
 
 
-def generate_tasks(count: int, project_ids: list[int], user_ids: list[int]) -> list[dict[str, Any]]:
+def generate_tasks(
+    count: int, project_workspace_map: dict[int, int], user_ids: list[int]
+) -> list[dict[str, Any]]:
     tasks = []
     statuses = [TaskStatus.todo.value, TaskStatus.in_progress.value, TaskStatus.done.value]
     priorities = [TaskPriority.low.value, TaskPriority.medium.value, TaskPriority.high.value]
+    project_ids = list(project_workspace_map.keys())
     today = date.today()
 
     for i in range(1, count + 1):
@@ -186,6 +237,7 @@ def generate_tasks(count: int, project_ids: list[int], user_ids: list[int]) -> l
         noun = random.choice(TASK_NOUNS)
         assignee = random.choice(user_ids) if random.random() > 0.15 else None
         due_offset = random.randint(-15, 30)
+        proj_id = random.choice(project_ids)
 
         tasks.append(
             {
@@ -196,7 +248,8 @@ def generate_tasks(count: int, project_ids: list[int], user_ids: list[int]) -> l
                 "status": random.choice(statuses),
                 "priority": random.choice(priorities),
                 "due_date": today + timedelta(days=due_offset),
-                "project_id": random.choice(project_ids),
+                "project_id": proj_id,
+                "workspace_id": project_workspace_map[proj_id],
                 "assignee_id": assignee,
             }
         )
@@ -206,7 +259,10 @@ def generate_tasks(count: int, project_ids: list[int], user_ids: list[int]) -> l
 async def clean_database(session: AsyncSession) -> None:
     print("Clearing existing data...")
     await session.execute(
-        text('TRUNCATE TABLE task, project_user, project, "user" RESTART IDENTITY CASCADE;')
+        text(
+            'TRUNCATE TABLE task, project_user, project, workspace_user, workspace, "user" '
+            "RESTART IDENTITY CASCADE;"
+        )
     )
     await session.commit()
     print("Database truncated successfully.")
@@ -220,6 +276,7 @@ async def seed_data(
     reset: bool,
     clean_only: bool = False,
     db_url: str | None = None,
+    num_workspaces: int = 2,
 ) -> None:
     target_url = db_url or str(settings.database_url)
     engine = create_async_engine(target_url, echo=False)
@@ -229,7 +286,7 @@ async def seed_data(
         print("Starting clean reset process (Wiping all data)...")
     else:
         print(
-            f"Starting seed process (Target: {num_users} users, "
+            f"Starting seed process (Target: {num_workspaces} workspaces, {num_users} users, "
             f"{num_projects} projects, {num_tasks} tasks)..."
         )
 
@@ -238,7 +295,15 @@ async def seed_data(
             await clean_database(session)
 
         if not clean_only:
-            # 1. Seed Users
+            # 1. Seed Workspaces
+            print(f"Seeding {num_workspaces} workspaces...")
+            ws_dicts = generate_workspaces(num_workspaces)
+            ws_stmt = insert(Workspace).values(ws_dicts).returning(Workspace.id)
+            res = await session.execute(ws_stmt)
+            workspace_ids = list(res.scalars().all())
+            await session.commit()
+
+            # 2. Seed Users
             print(f"Seeding {num_users} users...")
             user_dicts = generate_users(num_users)
             user_stmt = insert(User).values(user_dicts).returning(User.id)
@@ -246,31 +311,43 @@ async def seed_data(
             user_ids = list(res.scalars().all())
             await session.commit()
 
-            # 2. Seed Projects
-            print(f"Seeding {num_projects} projects...")
-            proj_dicts = generate_projects(num_projects)
-            proj_stmt = insert(Project).values(proj_dicts).returning(Project.id)
-            res = await session.execute(proj_stmt)
-            project_ids = list(res.scalars().all())
+            # 3. Seed Workspace Memberships
+            print("Seeding workspace memberships...")
+            ws_memberships = generate_workspace_users(user_ids, workspace_ids)
+            await session.execute(insert(WorkspaceUser).values(ws_memberships))
             await session.commit()
 
-            # 3. Seed Project Memberships
+            # 4. Seed Projects
+            print(f"Seeding {num_projects} projects...")
+            proj_dicts = generate_projects(num_projects, workspace_ids)
+            proj_stmt = (
+                insert(Project).values(proj_dicts).returning(Project.id, Project.workspace_id)
+            )
+            res = await session.execute(proj_stmt)
+            project_rows = res.all()
+            project_workspace_map = {row[0]: row[1] for row in project_rows}
+            project_ids = list(project_workspace_map.keys())
+            await session.commit()
+
+            # 5. Seed Project Memberships
             print("Seeding project memberships...")
             memberships = generate_project_users(user_ids, project_ids)
             await session.execute(insert(ProjectUser).values(memberships))
             await session.commit()
 
-            # 4. Seed Tasks in batches
+            # 6. Seed Tasks in batches
             print(f"Seeding {num_tasks} tasks (batch size: {batch_size})...")
-            tasks_generated = generate_tasks(num_tasks, project_ids, user_ids)
+            tasks_generated = generate_tasks(num_tasks, project_workspace_map, user_ids)
             for i in range(0, len(tasks_generated), batch_size):
                 batch = tasks_generated[i : i + batch_size]
                 await session.execute(insert(Task).values(batch))
                 print(f"  Inserted tasks {i + 1} to {i + len(batch)}...")
             await session.commit()
 
-        # 5. Gather Final Counts
+        # Gather Final Counts
+        ws_count = (await session.execute(select(func.count(Workspace.id)))).scalar_one()
         user_count = (await session.execute(select(func.count(User.id)))).scalar_one()
+        wu_count = (await session.execute(select(func.count(WorkspaceUser.user_id)))).scalar_one()
         proj_count = (await session.execute(select(func.count(Project.id)))).scalar_one()
         pu_count = (await session.execute(select(func.count(ProjectUser.user_id)))).scalar_one()
         task_count = (await session.execute(select(func.count(Task.id)))).scalar_one()
@@ -285,7 +362,9 @@ async def seed_data(
     print("-" * 50)
     print(f"{'Table Name':<20} | {'Row Count':<15}")
     print("-" * 50)
+    print(f"{'workspace':<20} | {ws_count:<15}")
     print(f"{'user':<20} | {user_count:<15}")
+    print(f"{'workspace_user':<20} | {wu_count:<15}")
     print(f"{'project':<20} | {proj_count:<15}")
     print(f"{'project_user':<20} | {pu_count:<15}")
     print(f"{'task':<20} | {task_count:<15}")
@@ -303,6 +382,12 @@ def main() -> None:
         "--clean-only",
         action="store_true",
         help="Clean / truncate all tables and exit without seeding new data.",
+    )
+    parser.add_argument(
+        "--workspaces",
+        type=int,
+        default=2,
+        help="Number of workspaces to generate (default: 2).",
     )
     parser.add_argument(
         "--users",
@@ -341,6 +426,7 @@ def main() -> None:
     try:
         asyncio.run(
             seed_data(
+                num_workspaces=args.workspaces,
                 num_users=args.users,
                 num_projects=args.projects,
                 num_tasks=args.tasks,

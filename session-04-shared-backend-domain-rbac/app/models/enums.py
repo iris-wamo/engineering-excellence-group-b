@@ -16,5 +16,9 @@ class TaskPriority(StrEnum):
 
 
 class ProjectRole(StrEnum):
+    """A user's role within a single project. See docs/rbac-authorization-matrix.md."""
+
+    admin = "admin"
+    manager = "manager"
     owner = "owner"
     member = "member"

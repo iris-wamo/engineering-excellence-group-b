@@ -1,4 +1,5 @@
-from collections.abc import AsyncGenerator, Generator
+from collections.abc import AsyncGenerator, Awaitable, Callable
+from typing import NamedTuple
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -13,6 +14,9 @@ from app.db.base import Base
 from app.db.mongo import get_raw_task_imports_collection
 from app.db.session import get_db
 from app.main import app
+from app.models.enums import ProjectRole
+from app.models.project import Project
+from app.models.project_user import ProjectUser
 
 _base_url, _, _db_name = str(settings.database_url).rpartition("/")
 TEST_DATABASE_URL = f"{_base_url}/{_db_name}_test"
@@ -113,3 +117,64 @@ async def auth_headers(client: AsyncClient) -> dict[str, str]:
         json={"email": AUTH_USER["email"], "password": AUTH_USER["password"]},
     )
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+
+class AuthedUser(NamedTuple):
+    """A signed-up, logged-in user plus the header needed to act as them"""
+
+    id: int
+    headers: dict[str, str]
+
+
+@pytest.fixture()
+async def project(db_session: AsyncSession) -> Project:
+    """A project for role memberships to hang off
+
+    Inserted directly rather than through POST /api/v1/projects, because that endpoint
+    is admin-only and granting the admin role already needs a project to exist.
+    """
+    project = Project(name="Fixture Project", slug="fixture-project")
+    db_session.add(project)
+    await db_session.commit()
+    await db_session.refresh(project)
+    return project
+
+
+@pytest.fixture()
+async def make_user(
+    client: AsyncClient, db_session: AsyncSession, project: Project
+) -> Callable[..., Awaitable[AuthedUser]]:
+    """Factory that signs up a user and optionally gives them a role in a project"""
+
+    async def _make(
+        email: str, role: ProjectRole | None = None, *, project_id: int | None = None
+    ) -> AuthedUser:
+        password = "sup3r-secret"
+        signup = await client.post(
+            "/api/v1/auth/signup",
+            json={"name": email.split("@")[0], "email": email, "password": password},
+        )
+        user_id = signup.json()["id"]
+
+        if role is not None:
+            db_session.add(
+                ProjectUser(
+                    project_id=project_id if project_id is not None else project.id,
+                    user_id=user_id,
+                    role=role,
+                )
+            )
+            await db_session.commit()
+
+        login = await client.post("/api/v1/auth/login", json={"email": email, "password": password})
+        token = login.json()["access_token"]
+        return AuthedUser(id=user_id, headers={"Authorization": f"Bearer {token}"})
+
+    return _make
+
+
+@pytest.fixture()
+async def admin_headers(make_user: Callable[..., Awaitable[AuthedUser]]) -> dict[str, str]:
+    """Authorization header for a user holding the admin role"""
+    admin = await make_user("admin@example.com", ProjectRole.admin)
+    return admin.headers

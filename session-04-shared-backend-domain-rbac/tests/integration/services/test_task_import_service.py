@@ -8,32 +8,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import NotFoundError
 from app.db.mongo import get_raw_task_imports_collection
-from app.models.project import Project
 from app.models.task import Task
-from app.models.user import User
 from app.services.task_import_service import TaskImportService
+from tests.fixtures.factories import MISSING_ID, DataFactory
 
 
-async def _create_test_project(
-    db: AsyncSession, name: str = "Import Project", slug: str = "import-project"
-) -> Project:
-    proj = Project(name=name, slug=slug, description="Project for import testing")
-    db.add(proj)
-    await db.commit()
-    await db.refresh(proj)
-    return proj
-
-
-async def _create_test_user(db: AsyncSession, email: str = "importer@example.com") -> User:
-    user = User(name="Importer", email=email)
-    db.add(user)
-    await db.commit()
-    await db.refresh(user)
-    return user
-
-
-async def test_import_raw_task_success(db_session: AsyncSession) -> None:
-    project = await _create_test_project(db_session)
+async def test_import_raw_task_success(db_session: AsyncSession, factory: DataFactory) -> None:
+    project = await factory.project()
     raw = {
         "summary": "Implement OAuth2 Flow",
         "description": "Imported from external Jira sprint",
@@ -67,8 +48,10 @@ async def test_import_raw_task_success(db_session: AsyncSession) -> None:
     assert detail.raw_payload["external_tags"] == ["security", "auth"]
 
 
-async def test_import_raw_task_missing_title_fails(db_session: AsyncSession) -> None:
-    project = await _create_test_project(db_session)
+async def test_import_raw_task_missing_title_fails(
+    db_session: AsyncSession, factory: DataFactory
+) -> None:
+    project = await factory.project()
     raw = {
         "project_id": project.id,
         "priority": "low",
@@ -93,8 +76,9 @@ async def test_import_raw_task_missing_title_fails(db_session: AsyncSession) -> 
 
 async def test_import_raw_task_whitespace_title_falls_back_to_summary(
     db_session: AsyncSession,
+    factory: DataFactory,
 ) -> None:
-    project = await _create_test_project(db_session, name="Fallback Proj", slug="fallback-proj")
+    project = await factory.project(name="Fallback Proj")
     raw = {
         "title": "   ",
         "summary": "Recovered from Summary",
@@ -111,8 +95,10 @@ async def test_import_raw_task_whitespace_title_falls_back_to_summary(
     assert task.title == "Recovered from Summary"
 
 
-async def test_import_raw_task_title_over_100_chars_fails(db_session: AsyncSession) -> None:
-    project = await _create_test_project(db_session, name="Long Proj", slug="long-proj")
+async def test_import_raw_task_title_over_100_chars_fails(
+    db_session: AsyncSession, factory: DataFactory
+) -> None:
+    project = await factory.project(name="Long Proj")
     raw = {
         "title": "A" * 101,
         "project_id": project.id,
@@ -126,8 +112,10 @@ async def test_import_raw_task_title_over_100_chars_fails(db_session: AsyncSessi
     assert "100" in result.error_details["message"]
 
 
-async def test_import_raw_task_non_string_description_fails(db_session: AsyncSession) -> None:
-    project = await _create_test_project(db_session, name="Dict Desc Proj", slug="dict-desc-proj")
+async def test_import_raw_task_non_string_description_fails(
+    db_session: AsyncSession, factory: DataFactory
+) -> None:
+    project = await factory.project(name="Dict Desc Proj")
     raw = {
         "title": "Task with Dict Description",
         "description": {"some": "nested_object"},
@@ -173,7 +161,7 @@ async def test_import_raw_task_float_project_id_fails(db_session: AsyncSession) 
 async def test_import_raw_task_nonexistent_project_fails(db_session: AsyncSession) -> None:
     raw = {
         "title": "Task for Ghost Project",
-        "project_id": 999999,
+        "project_id": MISSING_ID,
         "priority": "medium",
     }
 
@@ -182,15 +170,17 @@ async def test_import_raw_task_nonexistent_project_fails(db_session: AsyncSessio
     assert result.status == "FAILED"
     assert result.postgres_task_id is None
     assert result.error_details is not None
-    assert "Project 999999 not found" in str(result.error_details.get("message"))
+    assert f"Project {MISSING_ID} not found" in str(result.error_details.get("message"))
 
     # Verify PostgreSQL rollback
     count = (await db_session.execute(select(Task))).scalars().all()
     assert len(count) == 0
 
 
-async def test_import_raw_task_invalid_priority_fails(db_session: AsyncSession) -> None:
-    project = await _create_test_project(db_session)
+async def test_import_raw_task_invalid_priority_fails(
+    db_session: AsyncSession, factory: DataFactory
+) -> None:
+    project = await factory.project()
     raw = {
         "title": "Task with Invalid Priority",
         "project_id": project.id,
@@ -205,15 +195,16 @@ async def test_import_raw_task_invalid_priority_fails(db_session: AsyncSession) 
     assert "Invalid priority" in str(result.error_details.get("message"))
 
 
-async def test_import_raw_task_non_member_assignee_fails(db_session: AsyncSession) -> None:
-    from app.models.project_user import ProjectRole, ProjectUser
+async def test_import_raw_task_non_member_assignee_fails(
+    db_session: AsyncSession, factory: DataFactory
+) -> None:
+    from app.models.enums import ProjectRole
 
-    project = await _create_test_project(db_session)
-    owner = await _create_test_user(db_session, email="owner@example.com")
-    db_session.add(ProjectUser(project_id=project.id, user_id=owner.id, role=ProjectRole.owner))
-    await db_session.commit()
+    project = await factory.project()
+    owner = await factory.user(email="owner@example.com")
+    await factory.grant_role(owner, project, ProjectRole.owner)
 
-    non_member = await _create_test_user(db_session, email="nonmember@example.com")
+    non_member = await factory.user(email="nonmember@example.com")
     raw = {
         "title": "Task with Non-Member Assignee",
         "project_id": project.id,
@@ -231,11 +222,10 @@ async def test_import_raw_task_non_member_assignee_fails(db_session: AsyncSessio
 
 async def test_post_commit_mongo_failure_does_not_report_failed(
     db_session: AsyncSession,
+    factory: DataFactory,
 ) -> None:
     """When Mongo update fails after Postgres commit, do NOT report FAILED."""
-    project = await _create_test_project(
-        db_session, name="Post Commit Proj", slug="post-commit-proj"
-    )
+    project = await factory.project(name="Post Commit Proj")
     raw = {
         "title": "Task Committed To Postgres",
         "project_id": project.id,
@@ -266,9 +256,11 @@ async def test_post_commit_mongo_failure_does_not_report_failed(
     assert task.title == "Task Committed To Postgres"
 
 
-async def test_idempotent_import_avoids_duplicate_tasks(db_session: AsyncSession) -> None:
+async def test_idempotent_import_avoids_duplicate_tasks(
+    db_session: AsyncSession, factory: DataFactory
+) -> None:
     """Sending the same idempotency key twice returns the same import and task."""
-    project = await _create_test_project(db_session, name="Idem Proj", slug="idem-proj")
+    project = await factory.project(name="Idem Proj")
     raw = {
         "title": "Sync from external system",
         "project_id": project.id,
@@ -296,14 +288,15 @@ async def test_idempotent_import_avoids_duplicate_tasks(db_session: AsyncSession
 
 async def test_import_raw_tasks_batch_mid_batch_failure_preserves_other_commits(
     db_session: AsyncSession,
+    factory: DataFactory,
 ) -> None:
     """Batch with a mid-batch error: later items still process, earlier commits remain."""
-    project = await _create_test_project(db_session, name="Mid Batch Proj", slug="mid-batch-proj")
+    project = await factory.project(name="Mid Batch Proj")
     items = [
         {"summary": "Batch 1 (Success)", "project_id": project.id, "priority": "high"},
         {
             "summary": "Batch 2 (Fail - Nonexistent Proj)",
-            "project_id": 999999,
+            "project_id": MISSING_ID,
             "priority": "medium",
         },
         {"summary": "Batch 3 (Success)", "project_id": project.id, "priority": "low"},
@@ -327,9 +320,11 @@ async def test_import_raw_tasks_batch_mid_batch_failure_preserves_other_commits(
     assert t3 is not None and t3.title == "Batch 3 (Success)"
 
 
-async def test_unexpected_database_error_shields_client(db_session: AsyncSession) -> None:
+async def test_unexpected_database_error_shields_client(
+    db_session: AsyncSession, factory: DataFactory
+) -> None:
     """Unexpected DB errors return sanitized error details without leaking SQL text."""
-    project = await _create_test_project(db_session, name="Shield Proj", slug="shield-proj")
+    project = await factory.project(name="Shield Proj")
     raw = {
         "title": "Shielded Error Task",
         "project_id": project.id,
@@ -359,9 +354,10 @@ async def test_get_import_by_id_not_found() -> None:
 
 async def test_idempotent_retry_reconciles_pending_import_after_post_commit_failure(
     db_session: AsyncSession,
+    factory: DataFactory,
 ) -> None:
     """When post-commit Mongo update fails, an idempotent retry self-heals PENDING to SUCCESS."""
-    project = await _create_test_project(db_session, name="Reconcile Proj", slug="reconcile-proj")
+    project = await factory.project(name="Reconcile Proj")
     raw = {
         "title": "Idempotent Reconcile Task",
         "project_id": project.id,

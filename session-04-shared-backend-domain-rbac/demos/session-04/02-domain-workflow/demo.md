@@ -1,9 +1,10 @@
 # Demo 02 — Domain Workflow Engine
 
 ## Loom Video
-https://www.loom.com/share/73c888c87f594657a97d5208f1377561
+<https://www.loom.com/share/73c888c87f594657a97d5208f1377561>
 
 ## Objective
+
 Prove that task status changes follow one workflow, enforced in one place:
 
 ```
@@ -13,9 +14,11 @@ todo → in_progress → review → done
 Adjacent backward moves are allowed so work can be reopened (`in_progress → todo`, `review → in_progress`, `done → review`). Skipping steps (for example `todo → done`) is rejected with a consistent error. Every valid move writes a status history row and an activity log row; a rejected move writes nothing.
 
 ## Scenario
+
 A user tries to close a brand-new task by jumping from `todo` straight to `done`. The API refuses. They then move it through the proper steps, send it back for rework once, and finish it. Afterwards the DB shows the full trail.
 
 ## Commands / Steps Used
+
 Start the stack and apply migrations (adds the `review` status):
 
 ```bash
@@ -52,9 +55,10 @@ curl -s -X POST $API/tasks/$TID2/assign -H "$H" -d '{"assignee_id": null, "statu
 #    (replace 1 with the value of $TID)
 ```
 
-Tests: `uv run pytest tests/api/test_task_workflow.py tests/api/test_tasks_assignment_api.py -v`
+Tests: `uv run pytest tests/integration/api/test_task_workflow.py tests/integration/api/test_tasks_assignment_api.py -v`
 
 ## Expected Behavior
+
 - `todo -> done` returns `400` with code `INVALID_STATUS_TRANSITION` and nothing is written.
 - Each valid move returns `200` with the new status.
 - The assign endpoint applies the same rule: `{"status": "done"}` on a `todo` task returns `400` and the task is left unchanged.
@@ -63,6 +67,7 @@ Tests: `uv run pytest tests/api/test_task_workflow.py tests/api/test_tasks_assig
 - Two concurrent changes to one task are applied one after the other; the second is validated against the first one's result.
 
 ## Actual Findings
+
 Run against the local API and Postgres on 2026-10-06:
 
 - `todo -> done` returned `400` with a clean error body.
@@ -72,7 +77,9 @@ Run against the local API and Postgres on 2026-10-06:
 - `changed_by_id` / `actor_id` are `NULL` for the status endpoint, because the endpoint does not yet know who the caller is.
 
 ## Evidence
+
 Invalid move — `PATCH /api/v1/tasks/201/status {"status": "done"}` → `400`:
+
 ```json
 {
   "error": {
@@ -84,6 +91,7 @@ Invalid move — `PATCH /api/v1/tasks/201/status {"status": "done"}` → `400`:
 ```
 
 Same rule via assign — `POST /api/v1/tasks/{id}/assign {"assignee_id": null, "status": "done"}` → `400`:
+
 ```json
 {
   "error": {
@@ -95,6 +103,7 @@ Same rule via assign — `POST /api/v1/tasks/{id}/assign {"assignee_id": null, "
 ```
 
 Status history after the valid path:
+
 ```
  previous_status | new_status
 -----------------+-------------
@@ -106,6 +115,7 @@ Status history after the valid path:
 ```
 
 Activity log after the valid path:
+
 ```
      action     |                          details
 ----------------+------------------------------------------------------------
@@ -117,8 +127,10 @@ Activity log after the valid path:
 ```
 
 ## What We Learned
+
 Put the state machine in one workflow class and make every entry point call it. The status endpoint and the assign endpoint both change status, and the rules only hold because both go through `TaskWorkflow`. Validating before writing also means a rejected move leaves no partial history.
 
 ## Open Questions
+
 - Who made the change? `changed_by_id` and `actor_id` stay empty until the API knows the current user (planned with RBAC).
 - Should reopening a finished task (`done → review`) be allowed for everyone, or only for certain roles?

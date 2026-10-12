@@ -1,5 +1,3 @@
-from collections.abc import Awaitable, Callable
-
 from httpx import AsyncClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,26 +5,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.activity_log import ActivityLog
 from app.models.enums import ProjectRole, TaskStatus
 from app.models.task_status_history import TaskStatusHistory
-from tests.conftest import AuthedUser
+from tests.fixtures.auth import AuthedUser
+from tests.fixtures.factories import DataFactory
 
-MakeUser = Callable[..., Awaitable[AuthedUser]]
 
-
-async def _create_workflow_context(
-    client: AsyncClient,
-    admin_headers: dict[str, str],
-    make_user: MakeUser,
-    name: str,
-) -> tuple[int, AuthedUser]:
-    slug_name = name.lower().replace(" ", "_")
-    project_resp = await client.post("/api/v1/projects", json={"name": name}, headers=admin_headers)
-    project_id = project_resp.json()["id"]
-    user = await make_user(f"{slug_name}@example.com", ProjectRole.member, project_id=project_id)
-    resp = await client.post(
-        "/api/v1/tasks",
-        json={"title": name, "project_id": project_id, "assignee_id": user.id},
-    )
-    return int(resp.json()["id"]), user
+async def _create_workflow_context(factory: DataFactory, name: str) -> tuple[int, AuthedUser]:
+    """A task in `todo` assigned to a project member, who is allowed to move it."""
+    project = await factory.project(name=name)
+    user = await factory.member(project, ProjectRole.member)
+    task = await factory.task(project, title=name, assignee=user.id)
+    return task.id, user
 
 
 async def _move(client: AsyncClient, task_id: int, status: str, headers: dict[str, str]) -> int:
@@ -56,12 +44,8 @@ async def _activity_count(db: AsyncSession, task_id: int) -> int:
     )
 
 
-async def test_valid_task_transitions(
-    client: AsyncClient, admin_headers: dict[str, str], make_user: MakeUser
-) -> None:
-    task_id, user = await _create_workflow_context(
-        client, admin_headers, make_user, "Workflow Project 1"
-    )
+async def test_valid_task_transitions(client: AsyncClient, factory: DataFactory) -> None:
+    task_id, user = await _create_workflow_context(factory, "Workflow Project 1")
 
     # todo -> in_progress
     resp = await client.patch(
@@ -92,11 +76,9 @@ async def test_valid_task_transitions(
 
 
 async def test_reverse_task_transition_is_allowed(
-    client: AsyncClient, admin_headers: dict[str, str], make_user: MakeUser
+    client: AsyncClient, factory: DataFactory
 ) -> None:
-    task_id, user = await _create_workflow_context(
-        client, admin_headers, make_user, "Workflow Project 2"
-    )
+    task_id, user = await _create_workflow_context(factory, "Workflow Project 2")
 
     resp = await client.patch(
         f"/api/v1/tasks/{task_id}/status",
@@ -115,12 +97,8 @@ async def test_reverse_task_transition_is_allowed(
     assert resp.json()["status"] == "todo"
 
 
-async def test_invalid_task_transition(
-    client: AsyncClient, admin_headers: dict[str, str], make_user: MakeUser
-) -> None:
-    task_id, user = await _create_workflow_context(
-        client, admin_headers, make_user, "Workflow Project 3"
-    )
+async def test_invalid_task_transition(client: AsyncClient, factory: DataFactory) -> None:
+    task_id, user = await _create_workflow_context(factory, "Workflow Project 3")
 
     # todo -> done (invalid)
     resp = await client.patch(
@@ -138,10 +116,9 @@ async def test_invalid_task_transition(
 async def test_valid_move_writes_history_and_activity_rows(
     client: AsyncClient,
     db_session: AsyncSession,
-    admin_headers: dict[str, str],
-    make_user: MakeUser,
+    factory: DataFactory,
 ) -> None:
-    task_id, user = await _create_workflow_context(client, admin_headers, make_user, "Audit Trail")
+    task_id, user = await _create_workflow_context(factory, "Audit Trail")
 
     for status in ("in_progress", "review", "in_progress", "review", "done"):
         assert await _move(client, task_id, status, user.headers) == 200
@@ -168,12 +145,9 @@ async def test_valid_move_writes_history_and_activity_rows(
 async def test_rejected_move_writes_nothing(
     client: AsyncClient,
     db_session: AsyncSession,
-    admin_headers: dict[str, str],
-    make_user: MakeUser,
+    factory: DataFactory,
 ) -> None:
-    task_id, user = await _create_workflow_context(
-        client, admin_headers, make_user, "Rejected Move"
-    )
+    task_id, user = await _create_workflow_context(factory, "Rejected Move")
 
     assert await _move(client, task_id, "done", user.headers) == 400
 
@@ -185,10 +159,9 @@ async def test_rejected_move_writes_nothing(
 async def test_reopen_and_rework_paths(
     client: AsyncClient,
     db_session: AsyncSession,
-    admin_headers: dict[str, str],
-    make_user: MakeUser,
+    factory: DataFactory,
 ) -> None:
-    task_id, user = await _create_workflow_context(client, admin_headers, make_user, "Reopen")
+    task_id, user = await _create_workflow_context(factory, "Reopen")
     for status in ("in_progress", "review", "done"):
         assert await _move(client, task_id, status, user.headers) == 200
 
@@ -206,10 +179,9 @@ async def test_reopen_and_rework_paths(
 async def test_skipping_steps_is_rejected(
     client: AsyncClient,
     db_session: AsyncSession,
-    admin_headers: dict[str, str],
-    make_user: MakeUser,
+    factory: DataFactory,
 ) -> None:
-    task_id, user = await _create_workflow_context(client, admin_headers, make_user, "Skips")
+    task_id, user = await _create_workflow_context(factory, "Skips")
     assert await _move(client, task_id, "in_progress", user.headers) == 200
     assert await _move(client, task_id, "done", user.headers) == 400  # in_progress -> done
     assert await _move(client, task_id, "review", user.headers) == 200
@@ -225,10 +197,9 @@ async def test_skipping_steps_is_rejected(
 async def test_same_status_is_a_noop(
     client: AsyncClient,
     db_session: AsyncSession,
-    admin_headers: dict[str, str],
-    make_user: MakeUser,
+    factory: DataFactory,
 ) -> None:
-    task_id, user = await _create_workflow_context(client, admin_headers, make_user, "Idempotent")
+    task_id, user = await _create_workflow_context(factory, "Idempotent")
     assert await _move(client, task_id, "in_progress", user.headers) == 200
     before = await _activity_count(db_session, task_id)
 

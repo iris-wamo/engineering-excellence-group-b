@@ -8,6 +8,7 @@ from bson import ObjectId
 from pydantic import ValidationError
 from pymongo.asynchronous.collection import AsyncCollection
 from pymongo.errors import DuplicateKeyError
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from taskflow_shared.enums import ImportStatus
 
@@ -63,13 +64,42 @@ class TaskImportService:
                 except ValueError:
                     status_enum = ImportStatus.FAILED
 
+                postgres_task_id = existing.get("postgres_task_id")
+                updated_at = existing.get("updated_at", datetime.now(UTC))
+
+                # Reconcile if MongoDB was left in PENDING but Postgres task was committed
+                if status_enum == ImportStatus.PENDING:
+                    stmt = select(Task).where(Task.mongo_import_id == str(existing["_id"]))
+                    committed_task = (await db.execute(stmt)).scalar_one_or_none()
+                    if committed_task is not None:
+                        status_enum = ImportStatus.SUCCESS
+                        postgres_task_id = committed_task.id
+                        updated_at = datetime.now(UTC)
+                        try:
+                            await col.update_one(
+                                {"_id": existing["_id"]},
+                                {
+                                    "$set": {
+                                        "status": ImportStatus.SUCCESS.value,
+                                        "postgres_task_id": committed_task.id,
+                                        "updated_at": updated_at,
+                                    }
+                                },
+                            )
+                        except Exception as mongo_err:
+                            logger.error(
+                                "Failed to reconcile MongoDB status on retry for %s: %s",
+                                existing["_id"],
+                                mongo_err,
+                            )
+
                 return TaskImportResponse(
                     import_id=str(existing["_id"]),
                     status=status_enum,
-                    postgres_task_id=existing.get("postgres_task_id"),
+                    postgres_task_id=postgres_task_id,
                     error_details=existing.get("error_details"),
                     created_at=existing.get("created_at", datetime.now(UTC)),
-                    updated_at=existing.get("updated_at", datetime.now(UTC)),
+                    updated_at=updated_at,
                 )
 
         now = datetime.now(UTC)

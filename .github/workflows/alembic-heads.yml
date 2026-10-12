@@ -18,7 +18,7 @@ permissions:
 env:
   # UPDATE THIS when a new session is forked from the previous one
   # (see "Forking a new session" in the root README).
-  CURRENT_SESSION: session-04-shared-backend-domain-rbac
+  CURRENT_SESSION: session-05-async-redis-celery
 
 jobs:
   check-heads:

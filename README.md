@@ -41,6 +41,20 @@ Take the Session 03 API forward with a focus on codebase separation, a reusable 
 See [`session-04-shared-backend-domain-rbac/README.md`](session-04-shared-backend-domain-rbac/README.md) for setup instructions.
 
 
+### Session 05 — Async Programming, Redis Caching & Channeling, Celery Background Jobs & Monitoring ([`session-05-async-redis-celery/`](session-05-async-redis-celery/))
+
+Move TaskFlow from a basic API into an asynchronous backend workflow. This session covers:
+
+- Non-blocking async endpoints vs. blocking I/O and external calls.
+- Redis caching with explicit TTL, key namespacing, and cache invalidation strategies.
+- Redis Pub/Sub vs. Redis Streams for event channeling, offline consumers, and delivery guarantees.
+- Celery background workers with retry policies, error handling, and worker-down resilience.
+- Celery Beat for periodic scheduled tasks and overlap prevention.
+- Flower dashboard for real-time Celery worker, task, and retry monitoring.
+
+See [`session-05-async-redis-celery/README.md`](session-05-async-redis-celery/README.md) for setup instructions.
+
+
 ## Forking a new session
 
 Each session is a standalone copy of the previous one. When you fork `session-NN` into the next session directory:

@@ -1,16 +1,13 @@
 """Tests for the database seeding script."""
 
-import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Project, ProjectUser, Task, User, Workspace, WorkspaceUser
 from scripts.seed_data import seed_data
-from tests.conftest import TEST_DATABASE_URL
 
 
-@pytest.mark.asyncio
-async def test_seed_data_script() -> None:
+async def test_seed_data_script(test_database: str) -> None:
     """Test that seed_data creates the expected number of records including workspaces."""
     # Run seed script logic for small dataset targeting test database
     await seed_data(
@@ -20,13 +17,13 @@ async def test_seed_data_script() -> None:
         num_tasks=25,
         batch_size=10,
         reset=True,
-        db_url=TEST_DATABASE_URL,
+        db_url=test_database,
     )
 
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import create_async_engine
 
-    engine = create_async_engine(TEST_DATABASE_URL)
+    engine = create_async_engine(test_database)
     async with AsyncSession(engine) as session:
         ws_count = (await session.execute(select(func.count(Workspace.id)))).scalar_one()
         wu_count = (await session.execute(select(func.count(WorkspaceUser.user_id)))).scalar_one()

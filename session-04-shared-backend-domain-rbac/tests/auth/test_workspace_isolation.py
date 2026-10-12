@@ -9,145 +9,98 @@ Proves that:
 5. Invalid/missing headers are safely handled with backward compatibility for existing data.
 """
 
+from typing import NamedTuple
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from taskflow_shared.contracts.constants import HEADER_WORKSPACE_ID
 
-from app.models.enums import ProjectRole, TaskStatus
+from app.models.enums import ProjectRole
 from app.models.project import Project
-from app.models.project_user import ProjectUser
 from app.models.task import Task
 from app.models.workspace import Workspace
-from app.models.workspace_user import WorkspaceUser
-from tests.conftest import AuthedUser, MakeUser
+from tests.fixtures.auth import AuthedUser, auth_headers_for
+from tests.fixtures.factories import DataFactory
+
+
+class WorkspaceSetup(NamedTuple):
+    """What the workspace_setup fixture creates. See its docstring for who belongs where."""
+
+    ws1: Workspace
+    ws2: Workspace
+    user1: AuthedUser
+    user2: AuthedUser
+    user3: AuthedUser
+    p1: Project
+    p2: Project
+    t1: Task
+    t2: Task
 
 
 @pytest.fixture()
-async def two_workspaces(db_session: AsyncSession) -> tuple[Workspace, Workspace]:
-    """Create two separate workspaces for tenant isolation tests."""
+async def workspace_setup(db_session: AsyncSession, factory: DataFactory) -> WorkspaceSetup:
+    """Two tenants with their own admin, project, and task, plus one user in both.
+
+    - user1 (alice) belongs only to Workspace 1 and is admin of p1
+    - user2 (bob) belongs only to Workspace 2 and is admin of p2
+    - user3 (charlie) belongs to both workspaces and holds no role
+    """
     ws1 = await db_session.get(Workspace, 1)
-    if ws1 is None:
-        ws1 = Workspace(
-            name="Acme Corp",
-            slug="acme-corp",
-            description="Primary tenant",
-        )
-        db_session.add(ws1)
-        await db_session.commit()
-        await db_session.refresh(ws1)
+    assert ws1 is not None
+    ws2 = await factory.workspace(name="Globex Corp", slug="globex-corp")
 
-    ws2 = Workspace(
-        name="Globex Corp",
-        slug="globex-corp",
-        description="Secondary tenant",
+    alice = await factory.user(email="alice@acme.com", workspace_ids=(ws1.id,))
+    bob = await factory.user(email="bob@globex.com", workspace_ids=(ws2.id,))
+    charlie = await factory.user(email="charlie@consultant.com", workspace_ids=(ws1.id, ws2.id))
+
+    p1 = await factory.project(name="Acme Portal", slug="acme-portal", workspace=ws1)
+    p2 = await factory.project(name="Globex Engine", slug="globex-engine", workspace=ws2)
+    await factory.grant_role(alice, p1, ProjectRole.admin)
+    await factory.grant_role(bob, p2, ProjectRole.admin)
+
+    t1 = await factory.task(p1, title="Acme Task 1", assignee=alice)
+    t2 = await factory.task(p2, title="Globex Task 2", assignee=bob)
+
+    # Headers carry no X-Workspace-ID, so each test chooses the workspace explicitly.
+    return WorkspaceSetup(
+        ws1=ws1,
+        ws2=ws2,
+        user1=AuthedUser(alice.id, auth_headers_for(alice.id)),
+        user2=AuthedUser(bob.id, auth_headers_for(bob.id)),
+        user3=AuthedUser(charlie.id, auth_headers_for(charlie.id)),
+        p1=p1,
+        p2=p2,
+        t1=t1,
+        t2=t2,
     )
-    db_session.add(ws2)
-    await db_session.commit()
-    await db_session.refresh(ws2)
-    return ws1, ws2
 
 
-@pytest.fixture()
-async def workspace_setup(
-    db_session: AsyncSession,
-    two_workspaces: tuple[Workspace, Workspace],
-    make_user: MakeUser,
-) -> dict:
-    """Setup users, projects, and tasks across two isolated workspaces."""
-    ws1, ws2 = two_workspaces
-
-    # User 1: member only of Workspace 1 (admin in WS 1)
-    user1 = await make_user("alice@acme.com")
-    # User 2: member only of Workspace 2 (admin in WS 2)
-    user2 = await make_user("bob@globex.com")
-    # User 3: member of both Workspace 1 and Workspace 2
-    user3 = await make_user("charlie@consultant.com")
-
-    # User 2 is exclusively in Workspace 2 (remove default WS 1 membership, add WS 2)
-    ws1_user2 = await db_session.get(WorkspaceUser, (ws1.id, user2.id))
-    if ws1_user2 is not None:
-        await db_session.delete(ws1_user2)
-    db_session.add(WorkspaceUser(workspace_id=ws2.id, user_id=user2.id))
-
-    # User 3 is in both Workspace 1 (already enrolled on signup) and Workspace 2
-    db_session.add(WorkspaceUser(workspace_id=ws2.id, user_id=user3.id))
-
-    # Project in Workspace 1
-    p1 = Project(name="Acme Portal", slug="acme-portal", workspace_id=ws1.id)
-    # Project in Workspace 2
-    p2 = Project(name="Globex Engine", slug="globex-engine", workspace_id=ws2.id)
-    db_session.add_all([p1, p2])
-    await db_session.commit()
-    await db_session.refresh(p1)
-    await db_session.refresh(p2)
-
-    # User 1 is admin in Project 1
-    db_session.add(ProjectUser(project_id=p1.id, user_id=user1.id, role=ProjectRole.admin))
-    # User 2 is admin in Project 2
-    db_session.add(ProjectUser(project_id=p2.id, user_id=user2.id, role=ProjectRole.admin))
-
-    # Tasks in Project 1 (Workspace 1)
-    t1 = Task(
-        title="Acme Task 1",
-        project_id=p1.id,
-        workspace_id=ws1.id,
-        status=TaskStatus.todo,
-        assignee_id=user1.id,
-    )
-    # Tasks in Project 2 (Workspace 2)
-    t2 = Task(
-        title="Globex Task 2",
-        project_id=p2.id,
-        workspace_id=ws2.id,
-        status=TaskStatus.todo,
-        assignee_id=user2.id,
-    )
-    db_session.add_all([t1, t2])
-    await db_session.commit()
-    await db_session.refresh(t1)
-    await db_session.refresh(t2)
-
-    return {
-        "ws1": ws1,
-        "ws2": ws2,
-        "user1": user1,
-        "user2": user2,
-        "user3": user3,
-        "p1": p1,
-        "p2": p2,
-        "t1": t1,
-        "t2": t2,
-    }
-
-
-@pytest.mark.asyncio
 async def test_projects_and_tasks_belong_to_workspace(
-    client: AsyncClient, workspace_setup: dict
+    client: AsyncClient, workspace_setup: WorkspaceSetup
 ) -> None:
     """Verify that projects and tasks have workspace_id correctly assigned."""
-    p1 = workspace_setup["p1"]
-    p2 = workspace_setup["p2"]
-    t1 = workspace_setup["t1"]
-    t2 = workspace_setup["t2"]
+    p1 = workspace_setup.p1
+    p2 = workspace_setup.p2
+    t1 = workspace_setup.t1
+    t2 = workspace_setup.t2
 
-    assert p1.workspace_id == workspace_setup["ws1"].id
-    assert p2.workspace_id == workspace_setup["ws2"].id
-    assert t1.workspace_id == workspace_setup["ws1"].id
-    assert t2.workspace_id == workspace_setup["ws2"].id
+    assert p1.workspace_id == workspace_setup.ws1.id
+    assert p2.workspace_id == workspace_setup.ws2.id
+    assert t1.workspace_id == workspace_setup.ws1.id
+    assert t2.workspace_id == workspace_setup.ws2.id
 
 
-@pytest.mark.asyncio
 async def test_cross_workspace_project_get_blocked(
-    client: AsyncClient, workspace_setup: dict
+    client: AsyncClient, workspace_setup: WorkspaceSetup
 ) -> None:
     """User in Workspace 1 attempting to GET a project in Workspace 2 receives 404."""
-    user1: AuthedUser = workspace_setup["user1"]
-    p2: Project = workspace_setup["p2"]
+    user1: AuthedUser = workspace_setup.user1
+    p2: Project = workspace_setup.p2
 
     headers = {
         **user1.headers,
-        HEADER_WORKSPACE_ID: str(workspace_setup["ws1"].id),
+        HEADER_WORKSPACE_ID: str(workspace_setup.ws1.id),
     }
 
     # User 1 queries project 2 while in workspace 1 context
@@ -156,13 +109,12 @@ async def test_cross_workspace_project_get_blocked(
     assert res.json()["error"]["message"] == "Project not found"
 
 
-@pytest.mark.asyncio
 async def test_cross_workspace_project_listing_isolated(
-    client: AsyncClient, workspace_setup: dict
+    client: AsyncClient, workspace_setup: WorkspaceSetup
 ) -> None:
     """Listing projects in Workspace 1 only returns Workspace 1 projects."""
-    user1: AuthedUser = workspace_setup["user1"]
-    ws1: Workspace = workspace_setup["ws1"]
+    user1: AuthedUser = workspace_setup.user1
+    ws1: Workspace = workspace_setup.ws1
 
     headers = {
         **user1.headers,
@@ -178,15 +130,16 @@ async def test_cross_workspace_project_listing_isolated(
     assert "Globex Engine" not in project_names
 
 
-@pytest.mark.asyncio
-async def test_cross_workspace_task_get_blocked(client: AsyncClient, workspace_setup: dict) -> None:
+async def test_cross_workspace_task_get_blocked(
+    client: AsyncClient, workspace_setup: WorkspaceSetup
+) -> None:
     """User in Workspace 1 attempting to GET a task in Workspace 2 receives 404."""
-    user1: AuthedUser = workspace_setup["user1"]
-    t2: Task = workspace_setup["t2"]
+    user1: AuthedUser = workspace_setup.user1
+    t2: Task = workspace_setup.t2
 
     headers = {
         **user1.headers,
-        HEADER_WORKSPACE_ID: str(workspace_setup["ws1"].id),
+        HEADER_WORKSPACE_ID: str(workspace_setup.ws1.id),
     }
 
     res = await client.get(f"/api/v1/tasks/{t2.id}", headers=headers)
@@ -194,13 +147,12 @@ async def test_cross_workspace_task_get_blocked(client: AsyncClient, workspace_s
     assert res.json()["error"]["message"] == "Task not found"
 
 
-@pytest.mark.asyncio
 async def test_cross_workspace_task_listing_isolated(
-    client: AsyncClient, workspace_setup: dict
+    client: AsyncClient, workspace_setup: WorkspaceSetup
 ) -> None:
     """Listing tasks in Workspace 1 only returns Workspace 1 tasks."""
-    user1: AuthedUser = workspace_setup["user1"]
-    ws1: Workspace = workspace_setup["ws1"]
+    user1: AuthedUser = workspace_setup.user1
+    ws1: Workspace = workspace_setup.ws1
 
     headers = {
         **user1.headers,
@@ -216,14 +168,13 @@ async def test_cross_workspace_task_listing_isolated(
     assert "Globex Task 2" not in task_titles
 
 
-@pytest.mark.asyncio
 async def test_cross_workspace_task_creation_blocked(
-    client: AsyncClient, workspace_setup: dict
+    client: AsyncClient, workspace_setup: WorkspaceSetup
 ) -> None:
     """Cannot create a task pointing to a project from a different workspace."""
-    user1: AuthedUser = workspace_setup["user1"]
-    p2: Project = workspace_setup["p2"]
-    ws1: Workspace = workspace_setup["ws1"]
+    user1: AuthedUser = workspace_setup.user1
+    p2: Project = workspace_setup.p2
+    ws1: Workspace = workspace_setup.ws1
 
     headers = {
         **user1.headers,
@@ -243,14 +194,13 @@ async def test_cross_workspace_task_creation_blocked(
     assert res.json()["error"]["message"] == "Project not found"
 
 
-@pytest.mark.asyncio
 async def test_cross_workspace_status_update_blocked(
-    client: AsyncClient, workspace_setup: dict
+    client: AsyncClient, workspace_setup: WorkspaceSetup
 ) -> None:
     """User in Workspace 1 cannot update the status of a task in Workspace 2."""
-    user1: AuthedUser = workspace_setup["user1"]
-    t2: Task = workspace_setup["t2"]
-    ws1: Workspace = workspace_setup["ws1"]
+    user1: AuthedUser = workspace_setup.user1
+    t2: Task = workspace_setup.t2
+    ws1: Workspace = workspace_setup.ws1
 
     headers = {
         **user1.headers,
@@ -266,14 +216,13 @@ async def test_cross_workspace_status_update_blocked(
     assert res.json()["error"]["message"] == "Task not found"
 
 
-@pytest.mark.asyncio
 async def test_cross_workspace_task_assign_blocked(
-    client: AsyncClient, workspace_setup: dict
+    client: AsyncClient, workspace_setup: WorkspaceSetup
 ) -> None:
     """User in Workspace 1 cannot assign a task belonging to Workspace 2."""
-    user1: AuthedUser = workspace_setup["user1"]
-    t2: Task = workspace_setup["t2"]
-    ws1: Workspace = workspace_setup["ws1"]
+    user1: AuthedUser = workspace_setup.user1
+    t2: Task = workspace_setup.t2
+    ws1: Workspace = workspace_setup.ws1
 
     headers = {
         **user1.headers,
@@ -289,13 +238,12 @@ async def test_cross_workspace_task_assign_blocked(
     assert res.json()["error"]["message"] == "Task not found"
 
 
-@pytest.mark.asyncio
 async def test_user_cannot_switch_to_unauthorized_workspace(
-    client: AsyncClient, workspace_setup: dict
+    client: AsyncClient, workspace_setup: WorkspaceSetup
 ) -> None:
     """User 1 (only a member of Workspace 1) is rejected when claiming Workspace 2 header."""
-    user1: AuthedUser = workspace_setup["user1"]
-    ws2: Workspace = workspace_setup["ws2"]
+    user1: AuthedUser = workspace_setup.user1
+    ws2: Workspace = workspace_setup.ws2
 
     # User 1 provides X-Workspace-ID: ws2.id
     headers = {
@@ -309,12 +257,11 @@ async def test_user_cannot_switch_to_unauthorized_workspace(
     assert "not have permission to access this workspace" in res.json()["error"]["message"]
 
 
-@pytest.mark.asyncio
 async def test_invalid_and_nonexistent_workspace_headers(
-    client: AsyncClient, workspace_setup: dict
+    client: AsyncClient, workspace_setup: WorkspaceSetup
 ) -> None:
     """Malformed and non-existent workspace headers return proper error envelopes."""
-    user1: AuthedUser = workspace_setup["user1"]
+    user1: AuthedUser = workspace_setup.user1
 
     # 1. Non-integer header -> 400
     res = await client.get(
@@ -341,14 +288,13 @@ async def test_invalid_and_nonexistent_workspace_headers(
     assert res.json()["error"]["code"] == "NOT_FOUND"
 
 
-@pytest.mark.asyncio
 async def test_multi_workspace_user_can_switch_context(
-    client: AsyncClient, workspace_setup: dict
+    client: AsyncClient, workspace_setup: WorkspaceSetup
 ) -> None:
     """User 3 (member of both workspaces) can switch context and see respective data."""
-    user3: AuthedUser = workspace_setup["user3"]
-    ws1: Workspace = workspace_setup["ws1"]
-    ws2: Workspace = workspace_setup["ws2"]
+    user3: AuthedUser = workspace_setup.user3
+    ws1: Workspace = workspace_setup.ws1
+    ws2: Workspace = workspace_setup.ws2
 
     # When querying in Workspace 1
     res1 = await client.get(
@@ -371,12 +317,11 @@ async def test_multi_workspace_user_can_switch_context(
     assert "Acme Portal" not in names2
 
 
-@pytest.mark.asyncio
 async def test_backward_compatibility_default_workspace(
-    client: AsyncClient, workspace_setup: dict
+    client: AsyncClient, workspace_setup: WorkspaceSetup
 ) -> None:
     """Requests without X-Workspace-ID default to Workspace 1 and work seamlessly."""
-    user1: AuthedUser = workspace_setup["user1"]
+    user1: AuthedUser = workspace_setup.user1
 
     # No X-Workspace-ID header passed
     res = await client.get("/api/v1/projects", headers=user1.headers)
@@ -385,20 +330,18 @@ async def test_backward_compatibility_default_workspace(
     assert "Acme Portal" in names
 
 
-@pytest.mark.asyncio
 async def test_admin_role_does_not_bleed_across_workspaces(
-    client: AsyncClient, workspace_setup: dict, db_session: AsyncSession
+    client: AsyncClient, workspace_setup: WorkspaceSetup, factory: DataFactory
 ) -> None:
     """User 3 is a member in both WS 1 & WS 2, and an admin in a WS 1 project,
     but holds NO admin role in WS 2. Attempting to create a project in WS 2 returns 403 Forbidden.
     """
-    user3: AuthedUser = workspace_setup["user3"]
-    p1: Project = workspace_setup["p1"]
-    ws2: Workspace = workspace_setup["ws2"]
+    user3: AuthedUser = workspace_setup.user3
+    p1: Project = workspace_setup.p1
+    ws2: Workspace = workspace_setup.ws2
 
     # Make user3 an admin in Project 1 (Workspace 1)
-    db_session.add(ProjectUser(project_id=p1.id, user_id=user3.id, role=ProjectRole.admin))
-    await db_session.commit()
+    await factory.grant_role(user3.id, p1, ProjectRole.admin)
 
     # User 3 tries to create a project in Workspace 2 where they hold no admin role
     res = await client.post(
@@ -410,14 +353,13 @@ async def test_admin_role_does_not_bleed_across_workspaces(
     assert res.json()["error"]["code"] == "FORBIDDEN"
 
 
-@pytest.mark.asyncio
 async def test_cross_workspace_raw_task_import_blocked(
-    client: AsyncClient, workspace_setup: dict
+    client: AsyncClient, workspace_setup: WorkspaceSetup
 ) -> None:
     """Importing a task with a project belonging to another workspace fails normalization."""
-    user1: AuthedUser = workspace_setup["user1"]
-    p2: Project = workspace_setup["p2"]
-    ws1: Workspace = workspace_setup["ws1"]
+    user1: AuthedUser = workspace_setup.user1
+    p2: Project = workspace_setup.p2
+    ws1: Workspace = workspace_setup.ws1
 
     res = await client.post(
         "/api/v1/tasks/import",
@@ -435,15 +377,14 @@ async def test_cross_workspace_raw_task_import_blocked(
     assert "not found" in body["error_details"]["message"].lower()
 
 
-@pytest.mark.asyncio
 async def test_same_slug_allowed_in_different_workspaces(
-    client: AsyncClient, workspace_setup: dict, db_session: AsyncSession
+    client: AsyncClient, workspace_setup: WorkspaceSetup, db_session: AsyncSession
 ) -> None:
     """Projects in different workspaces can share the same slug without conflict."""
-    user1: AuthedUser = workspace_setup["user1"]
-    user2: AuthedUser = workspace_setup["user2"]
-    ws1: Workspace = workspace_setup["ws1"]
-    ws2: Workspace = workspace_setup["ws2"]
+    user1: AuthedUser = workspace_setup.user1
+    user2: AuthedUser = workspace_setup.user2
+    ws1: Workspace = workspace_setup.ws1
+    ws2: Workspace = workspace_setup.ws2
 
     # Create project 'Alpha Ops' in Workspace 1
     res1 = await client.post(
@@ -478,7 +419,6 @@ async def test_same_slug_allowed_in_different_workspaces(
     assert res3.json()["error"]["code"] == "CONFLICT"
 
 
-@pytest.mark.asyncio
 async def test_anonymous_default_workspace_setting_toggle(
     client: AsyncClient,
 ) -> None:

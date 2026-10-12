@@ -1,11 +1,7 @@
-from collections.abc import Awaitable, Callable
-
 from httpx import AsyncClient
 
 from app.models.enums import ProjectRole
-from tests.conftest import AuthedUser
-
-MakeUser = Callable[..., Awaitable[AuthedUser]]
+from tests.fixtures.auth import MakeUser
 
 
 async def test_create_task_returns_201_and_payload(

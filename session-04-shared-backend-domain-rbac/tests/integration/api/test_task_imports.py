@@ -1,23 +1,12 @@
 """Integration tests for raw task import API endpoints."""
 
 from httpx import AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.project import Project
-
-
-async def _create_test_project(
-    db: AsyncSession, name: str = "API Import Project", slug: str = "api-import-project"
-) -> Project:
-    proj = Project(name=name, slug=slug, description="Project for API import testing")
-    db.add(proj)
-    await db.commit()
-    await db.refresh(proj)
-    return proj
+from tests.fixtures.factories import DataFactory
 
 
-async def test_api_import_raw_task_success(client: AsyncClient, db_session: AsyncSession) -> None:
-    project = await _create_test_project(db_session)
+async def test_api_import_raw_task_success(client: AsyncClient, factory: DataFactory) -> None:
+    project = await factory.project()
     payload = {
         "raw_payload": {
             "summary": "Setup Monitoring & Alerting",
@@ -75,9 +64,9 @@ async def test_api_import_raw_task_failure(client: AsyncClient) -> None:
 
 
 async def test_api_import_raw_task_idempotency_header(
-    client: AsyncClient, db_session: AsyncSession
+    client: AsyncClient, factory: DataFactory
 ) -> None:
-    project = await _create_test_project(db_session, name="Idempotent Proj", slug="idempotent-proj")
+    project = await factory.project(name="Idempotent Proj")
     payload = {
         "raw_payload": {
             "summary": "Deploy cluster",
@@ -101,9 +90,9 @@ async def test_api_import_raw_task_idempotency_header(
 
 
 async def test_api_import_raw_task_rejects_overlong_title(
-    client: AsyncClient, db_session: AsyncSession
+    client: AsyncClient, factory: DataFactory
 ) -> None:
-    project = await _create_test_project(db_session, name="Long Title Proj", slug="long-title-proj")
+    project = await factory.project(name="Long Title Proj")
     payload = {
         "raw_payload": {
             "summary": "X" * 105,
@@ -124,9 +113,9 @@ async def test_api_get_raw_task_import_not_found(client: AsyncClient) -> None:
 
 
 async def test_api_import_raw_tasks_batch_mixed_results(
-    client: AsyncClient, db_session: AsyncSession
+    client: AsyncClient, factory: DataFactory
 ) -> None:
-    project = await _create_test_project(db_session, name="Batch Proj", slug="batch-proj")
+    project = await factory.project(name="Batch Proj")
     batch_payload = {
         "items": [
             {

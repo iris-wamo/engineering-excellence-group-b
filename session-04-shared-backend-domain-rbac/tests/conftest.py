@@ -1,115 +1,68 @@
-from collections.abc import AsyncGenerator, Awaitable, Callable, Generator
-from typing import NamedTuple
+"""Suite-wide fixtures.
+
+Database fixtures live in tests/fixtures/database.py and are registered as a plugin
+below. Data factories are in tests/fixtures/factories.py and token helpers in
+tests/fixtures/auth.py. Test modules import helpers and types from tests.fixtures,
+never from this file.
+"""
+
+from collections.abc import AsyncGenerator
+from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
-from app.db.base import Base
-from app.db.mongo import get_raw_task_imports_collection
 from app.db.session import get_db
 from app.main import app
 from app.models.enums import ProjectRole
 from app.models.project import Project
 from app.models.project_user import ProjectUser
+from tests.fixtures.auth import (
+    AUTH_USER,
+    DEFAULT_PASSWORD,
+    AuthedUser,
+    MakeUser,
+    auth_headers_for,
+)
+from tests.fixtures.factories import DEFAULT_WORKSPACE_ID, DataFactory
 
-_base_url, _, _db_name = str(settings.database_url).rpartition("/")
-TEST_DATABASE_URL = f"{_base_url}/{_db_name}_test"
-TEST_MONGO_DB = f"{settings.mongo_db}_test"
+pytest_plugins = ["tests.fixtures.database"]
 
-
-@pytest.fixture(scope="session", autouse=True)
-async def setup_database() -> AsyncGenerator[None, None]:
-    """Creates the database schema once at the start of tests and drops it at the end."""
-    engine = create_async_engine(TEST_DATABASE_URL)
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.drop_all)
-        await connection.run_sync(Base.metadata.create_all)
-        await connection.execute(
-            text(
-                "INSERT INTO workspace (id, name, slug, description, created_at, updated_at) "
-                "VALUES (1, 'Default Workspace', 'default-workspace', "
-                "'System default workspace', NOW(), NOW()) "
-                "ON CONFLICT (id) DO NOTHING;"
-            )
-        )
-        await connection.execute(
-            text(
-                "SELECT setval(pg_get_serial_sequence('workspace', 'id'), "
-                "COALESCE((SELECT MAX(id) FROM workspace), 1));"
-            )
-        )
-    yield
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.drop_all)
-    await engine.dispose()
+# Every test is marked after the top-level folder it lives in (tests/unit, tests/integration,
+# tests/auth), so `pytest -m unit` runs only the tests that need no database. Tests outside
+# tests/ (the taskflow_shared package) are pure, so they count as unit. Anything else is
+# treated as integration, the safe assumption. See docs/testing-strategy.md.
+_FOLDER_MARKERS = {"unit", "integration", "auth"}
 
 
-@pytest.fixture(scope="session", autouse=True)
-def setup_mongo_database() -> Generator[None, None]:
-    """Isolate tests into a separate Mongo test database and cleanup after session."""
-    from typing import Any
-
-    from pymongo import MongoClient
-
-    original_mongo_db = settings.mongo_db
-    settings.mongo_db = TEST_MONGO_DB
-
-    # Setup index using sync client
-    sync_client: MongoClient[dict[str, Any]] = MongoClient(
-        str(settings.mongo_url), serverSelectionTimeoutMS=5000
-    )
-    sync_client[TEST_MONGO_DB]["raw_task_imports"].create_index(
-        [("workspace_id", 1), ("idempotency_key", 1)],
-        unique=True,
-        partialFilterExpression={"idempotency_key": {"$type": "string"}},
-        name="uq_workspace_idempotency_key",
-    )
-
-    yield
-
-    sync_client.drop_database(TEST_MONGO_DB)
-    sync_client.close()
-    settings.mongo_db = original_mongo_db
-
-
-@pytest.fixture(autouse=True)
-async def clean_mongo_imports() -> None:
-    """Ensure clean raw_task_imports collection before each test in test database."""
-    col = get_raw_task_imports_collection()
-    await col.delete_many({})
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    tests_root = Path(__file__).parent
+    for item in items:
+        path = Path(str(item.path))
+        if tests_root not in path.parents:
+            item.add_marker("unit")
+            continue
+        folder = path.relative_to(tests_root).parts[0]
+        item.add_marker(folder if folder in _FOLDER_MARKERS else "integration")
 
 
 @pytest.fixture()
-async def db_session() -> AsyncGenerator[AsyncSession, None]:
-    """Provides a transactional database session that rolls back changes after each test."""
-    engine = create_async_engine(TEST_DATABASE_URL)
-    connection = await engine.connect()
-    transaction = await connection.begin()
-
-    # join_transaction_mode="create_savepoint" captures commits inside code (rolling them back)
-    testing_session_local = async_sessionmaker(
-        bind=connection,
-        autoflush=False,
-        expire_on_commit=False,
-        join_transaction_mode="create_savepoint",
-    )
-
-    async with testing_session_local() as session:
-        yield session
-
-    await transaction.rollback()
-    await connection.close()
-    await engine.dispose()
+async def factory(db_session: AsyncSession) -> DataFactory:
+    """Factory for users, workspaces, projects, roles, and tasks in the test session."""
+    return DataFactory(db_session)
 
 
-AUTH_USER = {"name": "Auth User", "email": "auth-user@example.com", "password": "sup3r-secret"}
+@pytest.fixture()
+async def viewer_headers(factory: DataFactory) -> dict[str, str]:
+    """Headers for a Workspace 1 member with no project role.
+
+    Use it for reads and validation checks so a test does not depend on anonymous
+    requests falling back to Workspace 1, a known limitation that is due to be switched
+    off (see docs/multi-tenancy-architecture.md, Known Limitations).
+    """
+    user = await factory.user()
+    return auth_headers_for(user.id, workspace_id=DEFAULT_WORKSPACE_ID)
 
 
 @pytest.fixture()
@@ -137,43 +90,31 @@ async def auth_headers(client: AsyncClient) -> dict[str, str]:
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
 
-class AuthedUser(NamedTuple):
-    """A signed-up, logged-in user plus the header needed to act as them"""
-
-    id: int
-    headers: dict[str, str]
-
-
-MakeUser = Callable[..., Awaitable[AuthedUser]]
-
-
 @pytest.fixture()
-async def project(db_session: AsyncSession) -> Project:
+async def project(factory: DataFactory) -> Project:
     """A project for role memberships to hang off
 
     Inserted directly rather than through POST /api/v1/projects, because that endpoint
     is admin-only and granting the admin role already needs a project to exist.
     """
-    project = Project(name="Fixture Project", slug="fixture-project", workspace_id=1)
-    db_session.add(project)
-    await db_session.commit()
-    await db_session.refresh(project)
-    return project
+    return await factory.project(name="Fixture Project", slug="fixture-project")
 
 
 @pytest.fixture()
-async def make_user(
-    client: AsyncClient, db_session: AsyncSession, project: Project
-) -> Callable[..., Awaitable[AuthedUser]]:
-    """Factory that signs up a user and optionally gives them a role in a project"""
+async def make_user(client: AsyncClient, db_session: AsyncSession, project: Project) -> MakeUser:
+    """Factory that signs up a user through the real API and optionally gives them a role
+
+    Prefer `factory.member(...)` in new tests. It is faster because it skips password
+    hashing and the signup/login round trip. Use this one when going through
+    signup and login is part of what the test covers.
+    """
 
     async def _make(
         email: str, role: ProjectRole | None = None, *, project_id: int | None = None
     ) -> AuthedUser:
-        password = "sup3r-secret"
         signup = await client.post(
             "/api/v1/auth/signup",
-            json={"name": email.split("@")[0], "email": email, "password": password},
+            json={"name": email.split("@")[0], "email": email, "password": DEFAULT_PASSWORD},
         )
         user_id = signup.json()["id"]
 
@@ -187,7 +128,9 @@ async def make_user(
             )
             await db_session.commit()
 
-        login = await client.post("/api/v1/auth/login", json={"email": email, "password": password})
+        login = await client.post(
+            "/api/v1/auth/login", json={"email": email, "password": DEFAULT_PASSWORD}
+        )
         token = login.json()["access_token"]
         return AuthedUser(id=user_id, headers={"Authorization": f"Bearer {token}"})
 
@@ -195,7 +138,7 @@ async def make_user(
 
 
 @pytest.fixture()
-async def admin_headers(make_user: Callable[..., Awaitable[AuthedUser]]) -> dict[str, str]:
+async def admin_headers(make_user: MakeUser) -> dict[str, str]:
     """Authorization header for a user holding the admin role"""
     admin = await make_user("admin@example.com", ProjectRole.admin)
     return admin.headers

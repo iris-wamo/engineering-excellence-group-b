@@ -34,8 +34,8 @@ uv run python scripts/demo_transaction_safe_assignment.py
 
 ### 3. Run Automated Tests
 ```bash
-uv run pytest tests/services/test_task_assignment_transaction.py -v
-uv run pytest tests/api/test_tasks_assignment_api.py -v
+uv run pytest tests/integration/services/test_task_assignment_transaction.py -v
+uv run pytest tests/integration/api/test_tasks_assignment_api.py -v
 ```
 
 ## Expected Behavior
@@ -147,7 +147,7 @@ tests/api/test_tasks_assignment_api.py::test_api_assign_task_non_member_returns_
 ## Evidence
 - **Before / After Success Snapshots**: Step 1 & Step 2 show complete state transitions across all 5 tables.
 - **Rollback Proof Snapshot**: Step 3 shows forced failure after staging all records, resulting in 0 partial writes.
-- **Automated Tests**: Unit and integration test suite passing with full isolation under `tests/services/test_task_assignment_transaction.py` and `tests/api/test_tasks_assignment_api.py`.
+- **Automated Tests**: Unit and integration test suite passing with full isolation under `tests/integration/services/test_task_assignment_transaction.py` and `tests/integration/api/test_tasks_assignment_api.py`.
 
 ## What We Learned
 - Staging all related records (`task`, `task_assignment_history`, `task_status_history`, `activity_log`, `notification`) before `db.commit()` guarantees that partial writes never corrupt database integrity.

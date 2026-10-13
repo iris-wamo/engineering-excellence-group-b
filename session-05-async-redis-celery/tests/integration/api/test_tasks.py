@@ -1,0 +1,129 @@
+from httpx import AsyncClient
+
+from app.models.enums import ProjectRole
+from tests.fixtures.auth import MakeUser
+from tests.fixtures.factories import MISSING_ID
+
+
+async def test_create_task_returns_201_and_payload(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    project_id = (
+        await client.post("/api/v1/projects", json={"name": "Alpha"}, headers=admin_headers)
+    ).json()["id"]
+
+    response = await client.post(
+        "/api/v1/tasks",
+        json={"title": "Login", "project_id": project_id},
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["title"] == "Login"
+    assert body["project_id"] == project_id
+    assert body["status"] == "todo"
+
+
+async def test_create_task_rejects_blank_title(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    project_id = (
+        await client.post("/api/v1/projects", json={"name": "Alpha"}, headers=admin_headers)
+    ).json()["id"]
+
+    response = await client.post(
+        "/api/v1/tasks",
+        json={"title": "", "project_id": project_id},
+    )
+
+    assert response.status_code == 422
+
+
+async def test_get_task_returns_404_for_missing_task(client: AsyncClient) -> None:
+    response = await client.get(f"/api/v1/tasks/{MISSING_ID}")
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "NOT_FOUND"
+
+
+async def test_list_tasks_returns_paginated_envelope(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    project_id = (
+        await client.post("/api/v1/projects", json={"name": "Alpha"}, headers=admin_headers)
+    ).json()["id"]
+    await client.post("/api/v1/tasks", json={"title": "A", "project_id": project_id})
+    await client.post("/api/v1/tasks", json={"title": "B", "project_id": project_id})
+
+    response = await client.get("/api/v1/tasks?page=1&page_size=1")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 2
+    assert body["page"] == 1
+    assert body["page_size"] == 1
+    assert len(body["items"]) == 1
+
+
+async def test_update_task_status(
+    client: AsyncClient, admin_headers: dict[str, str], make_user: MakeUser
+) -> None:
+    # Only the assignee may move a task's status, so the task is created for them.
+    member = await make_user("member@example.com", ProjectRole.member)
+    project_id = (
+        await client.post("/api/v1/projects", json={"name": "Alpha"}, headers=admin_headers)
+    ).json()["id"]
+    task_id = (
+        await client.post(
+            "/api/v1/tasks",
+            json={"title": "Login", "project_id": project_id, "assignee_id": member.id},
+        )
+    ).json()["id"]
+
+    response = await client.patch(
+        f"/api/v1/tasks/{task_id}/status",
+        json={"status": "in_progress"},
+        headers=member.headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "in_progress"
+
+
+async def test_create_task_returns_404_for_missing_project(client: AsyncClient) -> None:
+    response = await client.post(
+        "/api/v1/tasks",
+        json={"title": "Login", "project_id": MISSING_ID},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "NOT_FOUND"
+
+
+async def test_create_task_returns_404_for_missing_assignee(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    project_id = (
+        await client.post("/api/v1/projects", json={"name": "Alpha"}, headers=admin_headers)
+    ).json()["id"]
+
+    response = await client.post(
+        "/api/v1/tasks",
+        json={"title": "Login", "project_id": project_id, "assignee_id": MISSING_ID},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "NOT_FOUND"
+
+
+async def test_update_task_status_returns_404_for_missing_task(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    response = await client.patch(
+        f"/api/v1/tasks/{MISSING_ID}/status",
+        json={"status": "in_progress"},
+        headers=admin_headers,
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "NOT_FOUND"

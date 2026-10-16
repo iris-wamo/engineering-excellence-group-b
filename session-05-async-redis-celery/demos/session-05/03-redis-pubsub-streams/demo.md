@@ -1,7 +1,8 @@
 # Demo 03 — Redis Pub/Sub vs Redis Streams
 
 ## Loom Video
-_TODO: record and paste the Loom link here._
+- Part 1: <https://www.loom.com/share/ca0489487c8a4f2a987d6958f1d99036>
+- Part 2: <https://www.loom.com/share/92395e21b24f4ecd9a8f1ab496866718>
 
 ## Background in one minute
 

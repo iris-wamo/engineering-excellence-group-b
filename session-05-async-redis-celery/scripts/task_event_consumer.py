@@ -16,11 +16,14 @@ import os
 import signal
 import socket
 
-from redis.exceptions import ConnectionError as RedisConnectionError
 from taskflow_shared.logging import configure_logging
 
 from app.db.redis import create_redis_client
-from app.events.consumers import PubSubTaskEventConsumer, StreamTaskEventConsumer
+from app.events.consumers import (
+    PubSubTaskEventConsumer,
+    StreamTaskEventConsumer,
+    run_until_stopped,
+)
 from app.events.processor import TaskEventProcessor
 
 logger = logging.getLogger("task_event_consumer")
@@ -43,12 +46,7 @@ async def main(mode: str, name: str) -> None:
         else StreamTaskEventConsumer(redis, processor, consumer_name=name)
     )
     try:
-        while not stop.is_set():
-            try:
-                await consumer.run(stop)
-            except (RedisConnectionError, OSError) as exc:
-                logger.warning("Redis connection lost (%s); reconnecting in 2s", exc)
-                await asyncio.sleep(2)
+        await run_until_stopped(consumer, stop)
     finally:
         await redis.aclose()
         logger.info("Consumer shut down")

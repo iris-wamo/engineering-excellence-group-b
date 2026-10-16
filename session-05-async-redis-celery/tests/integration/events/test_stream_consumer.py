@@ -4,9 +4,12 @@ from typing import cast
 
 import pytest
 from redis.asyncio import Redis
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import ResponseError
 
 from app.core.config import settings
-from app.events.consumers import StreamTaskEventConsumer, XReadGroupReply
+from app.events import consumers as consumers_module
+from app.events.consumers import StreamTaskEventConsumer, XReadGroupReply, run_until_stopped
 from app.events.processor import ProcessOutcome, TaskEventProcessor
 from app.events.publisher import TaskEventPublisher
 from app.events.schemas import TaskEvent, TaskEventType
@@ -246,3 +249,80 @@ async def test_task_timeline_keeps_only_the_most_recent_entries(redis_client: Re
         str(e.event_id) for e in events[-3:]
     ]
     assert await processor.counts() == {"task.status_changed": 5}
+
+
+async def test_retry_pending_recovers_more_than_one_page_in_one_call(
+    redis_client: Redis, processor: TaskEventProcessor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(consumers_module, "PENDING_PAGE_SIZE", 2)
+    consumer = _consumer(redis_client, processor)
+    await consumer.ensure_group()
+    await TaskEventPublisher(redis_client).publish(*[make_event() for _ in range(5)])
+    for _ in range(5):
+        await _read_without_ack(redis_client, consumer.consumer_name)
+
+    handled = await consumer.retry_pending(min_idle_ms=0, only_mine=True)
+
+    assert handled == 5
+    assert await processor.counts() == {"task.status_changed": 5}
+    assert await _pending_count(redis_client) == 0
+
+
+async def test_retry_pending_visits_each_failing_entry_once_per_call(
+    redis_client: Redis, processor: TaskEventProcessor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(consumers_module, "PENDING_PAGE_SIZE", 2)
+    consumer = _consumer(redis_client, processor)
+    await consumer.ensure_group()
+    await TaskEventPublisher(redis_client).publish(*[make_event() for _ in range(3)])
+    attempts: list[TaskEvent] = []
+
+    async def always_fails(event: TaskEvent) -> ProcessOutcome:
+        attempts.append(event)
+        raise RuntimeError("still broken")
+
+    monkeypatch.setattr(processor, "process", always_fails)
+    await consumer.read_new()  # 3 attempts, all left pending
+
+    await consumer.retry_pending(min_idle_ms=0)
+
+    assert len(attempts) == 6  # each pending entry retried exactly once, no endless loop
+    assert await _pending_count(redis_client) == 3
+
+
+class _FlakyConsumer:
+    """Fails with the given errors on its first runs, then stops the loop."""
+
+    def __init__(self, stop: asyncio.Event, errors: list[Exception]) -> None:
+        self.stop = stop
+        self.errors = errors
+        self.runs = 0
+
+    async def run(self, stop: asyncio.Event, ready: asyncio.Event | None = None) -> None:
+        self.runs += 1
+        if self.errors:
+            raise self.errors.pop(0)
+        self.stop.set()
+
+
+async def test_worker_restarts_after_any_redis_error() -> None:
+    stop = asyncio.Event()
+    consumer = _FlakyConsumer(
+        stop,
+        [
+            ResponseError("OOM command not allowed when used memory > 'maxmemory'"),
+            RedisConnectionError("connection lost"),
+        ],
+    )
+
+    await asyncio.wait_for(run_until_stopped(consumer, stop, retry_delay=0), timeout=2)
+
+    assert consumer.runs == 3
+
+
+async def test_worker_does_not_hide_programming_errors() -> None:
+    stop = asyncio.Event()
+    consumer = _FlakyConsumer(stop, [TypeError("bug")])
+
+    with pytest.raises(TypeError):
+        await run_until_stopped(consumer, stop, retry_delay=0)

@@ -50,5 +50,14 @@ async def redis_client() -> AsyncGenerator[Redis, None]:
     yield client
     await client.flushdb()
     await client.aclose()
-    # The app's shared client is bound to this test's event loop, which is about to close.
+
+
+@pytest.fixture(autouse=True)
+async def close_app_redis_client() -> AsyncGenerator[None, None]:
+    """Close the app's shared Redis client after every test.
+
+    Any test that changes a task publishes events through it, and it is bound to the
+    test's event loop, which closes when the test ends. Opens no connection itself.
+    """
+    yield
     await close_redis_client()

@@ -18,7 +18,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from app.core.config import settings
 from app.db.base import Base
 from app.db.mongo import get_raw_task_imports_collection
-from app.db.redis import close_redis_client
 
 _base_url, _, _db_name = str(settings.database_url).rpartition("/")
 TEST_DATABASE_URL = f"{_base_url}/{_db_name}_test"
@@ -119,4 +118,3 @@ async def db_session(
     await get_raw_task_imports_collection().delete_many({})
     async with rolled_back_session(test_database) as session:
         yield session
-    await close_redis_client()

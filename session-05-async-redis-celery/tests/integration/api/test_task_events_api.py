@@ -37,6 +37,43 @@ async def test_status_change_publishes_status_changed_event(
     assert event.data == {"previous_status": "todo", "new_status": "in_progress"}
 
 
+async def test_creating_an_assigned_task_publishes_assigned_event(
+    client: AsyncClient, factory: DataFactory, redis_client: Redis
+) -> None:
+    project = await factory.project()
+    manager = await factory.member(project, ProjectRole.manager)
+    assignee = await factory.member(project)
+
+    resp = await client.post(
+        "/api/v1/tasks",
+        json={"title": "Born assigned", "project_id": project.id, "assignee_id": assignee.id},
+        headers=manager.headers,
+    )
+
+    assert resp.status_code == 201
+    [event] = await stream_events(redis_client)
+    assert event.event_type is TaskEventType.assigned
+    assert event.task_id == resp.json()["id"]
+    assert event.actor_id == manager.id
+    assert event.data == {"previous_assignee_id": None, "new_assignee_id": assignee.id}
+
+
+async def test_creating_an_unassigned_task_publishes_nothing(
+    client: AsyncClient, factory: DataFactory, redis_client: Redis
+) -> None:
+    project = await factory.project()
+    manager = await factory.member(project, ProjectRole.manager)
+
+    resp = await client.post(
+        "/api/v1/tasks",
+        json={"title": "Nobody yet", "project_id": project.id},
+        headers=manager.headers,
+    )
+
+    assert resp.status_code == 201
+    assert await stream_events(redis_client) == []
+
+
 async def test_rejected_status_change_publishes_nothing(
     client: AsyncClient, factory: DataFactory, redis_client: Redis
 ) -> None:

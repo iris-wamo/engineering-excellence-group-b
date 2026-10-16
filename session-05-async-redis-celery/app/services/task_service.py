@@ -107,7 +107,10 @@ _verify_project_membership = verify_project_membership
 class TaskService:
     @staticmethod
     async def create_task(
-        db: AsyncSession, data: TaskCreate, workspace_id: int = 1
+        db: AsyncSession,
+        data: TaskCreate,
+        workspace_id: int = 1,
+        actor_id: int | None = None,
     ) -> TaskResponse:
         project = await _get_project_or_404(db, data.project_id, workspace_id=workspace_id)
         if data.assignee_id is not None:
@@ -127,6 +130,10 @@ class TaskService:
             workspace_id=project.workspace_id,
         )
         task = await TaskRepository.create(db, task)
+        if task.assignee_id is not None:
+            await publish_task_events(
+                [TaskEvent.assignment_changed(task, previous_assignee_id=None, actor_id=actor_id)]
+            )
         return TaskResponse.model_validate(task)
 
     @staticmethod

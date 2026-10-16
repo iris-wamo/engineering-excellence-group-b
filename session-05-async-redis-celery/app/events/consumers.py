@@ -6,12 +6,12 @@ processing comes from the transport alone.
 
 import asyncio
 import logging
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 from pydantic import ValidationError
 from redis.asyncio import Redis
 from redis.exceptions import ConnectionError as RedisConnectionError
-from redis.exceptions import ResponseError
+from redis.exceptions import RedisError, ResponseError
 from redis.typing import EncodableT, FieldT
 
 from app.core.config import settings
@@ -19,6 +19,8 @@ from app.events.processor import TaskEventProcessor
 from app.events.schemas import TaskEvent
 
 logger = logging.getLogger(__name__)
+
+PENDING_PAGE_SIZE = 100
 
 # Stream replies as redis-py returns them over RESP2 with decode_responses=True.
 StreamEntry = tuple[str, dict[str, str]]
@@ -169,48 +171,61 @@ class StreamTaskEventConsumer:
         return handled
 
     async def retry_pending(self, min_idle_ms: int, only_mine: bool = False) -> int:
-        """Claim pending entries idle for at least `min_idle_ms` and process them again."""
-        pending: list[dict[str, Any]] = await self.redis.xpending_range(  # type: ignore[assignment]
-            self.stream,
-            self.group,
-            min="-",
-            max="+",
-            count=100,
-            consumername=self.consumer_name if only_mine else None,
-            idle=min_idle_ms or None,
-        )
+        """Claim every pending entry idle for at least `min_idle_ms` and process it again.
+
+        Walks the pending list once, a page at a time, so a backlog larger than one page is
+        recovered in a single call. Entries that fail again stay pending for the next call.
+        """
         handled = 0
-        for item in pending:
-            entry_id = item["message_id"]
-            claimed = cast(
-                list[tuple[str, dict[str, str] | None]],
-                await self.redis.xclaim(
-                    self.stream, self.group, self.consumer_name, min_idle_ms, [entry_id]
-                ),
+        start = "-"
+        while True:
+            page: list[dict[str, Any]] = await self.redis.xpending_range(  # type: ignore[assignment]
+                self.stream,
+                self.group,
+                min=start,
+                max="+",
+                count=PENDING_PAGE_SIZE,
+                consumername=self.consumer_name if only_mine else None,
+                idle=min_idle_ms or None,
             )
-            fields = claimed[0][1] if claimed else None
-            if not fields:
-                if claimed or not await self.redis.xrange(self.stream, entry_id, entry_id):
-                    logger.warning(
-                        "[streams] Pending entry %s was trimmed from the stream before it "
-                        "was processed; its event is lost",
-                        entry_id,
-                    )
-                    await self.redis.xack(self.stream, self.group, entry_id)
-                continue
-            attempt = item["times_delivered"] + 1
-            logger.warning(
-                "[streams] Redelivering pending entry %s (attempt %d, previously with %s)",
-                entry_id,
-                attempt,
-                item["consumer"],
-            )
-            if attempt > self.max_deliveries:
-                await self.dead_letter(entry_id, fields, f"exceeded {self.max_deliveries} attempts")
-            else:
-                await self.handle_entry(entry_id, fields)
-            handled += 1
-        return handled
+            for item in page:
+                if await self._retry_pending_entry(item, min_idle_ms):
+                    handled += 1
+            if len(page) < PENDING_PAGE_SIZE:
+                return handled
+            start = "(" + page[-1]["message_id"]  # exclusive: continue after the last one
+
+    async def _retry_pending_entry(self, item: dict[str, Any], min_idle_ms: int) -> bool:
+        """Claim one pending entry and process it. Returns False if there was nothing to do."""
+        entry_id = item["message_id"]
+        claimed = cast(
+            list[tuple[str, dict[str, str] | None]],
+            await self.redis.xclaim(
+                self.stream, self.group, self.consumer_name, min_idle_ms, [entry_id]
+            ),
+        )
+        fields = claimed[0][1] if claimed else None
+        if not fields:
+            if claimed or not await self.redis.xrange(self.stream, entry_id, entry_id):
+                logger.warning(
+                    "[streams] Pending entry %s was trimmed from the stream before it "
+                    "was processed; its event is lost",
+                    entry_id,
+                )
+                await self.redis.xack(self.stream, self.group, entry_id)
+            return False
+        attempt = item["times_delivered"] + 1
+        logger.warning(
+            "[streams] Redelivering pending entry %s (attempt %d, previously with %s)",
+            entry_id,
+            attempt,
+            item["consumer"],
+        )
+        if attempt > self.max_deliveries:
+            await self.dead_letter(entry_id, fields, f"exceeded {self.max_deliveries} attempts")
+        else:
+            await self.handle_entry(entry_id, fields)
+        return True
 
     async def handle_entry(self, entry_id: str, fields: dict[str, str]) -> None:
         try:
@@ -234,6 +249,32 @@ class StreamTaskEventConsumer:
         """Copy the entry to the dead-letter stream and ack it, so it stops being retried."""
         entry: dict[FieldT, EncodableT] = {key: value for key, value in fields.items()}
         entry.update(source_entry_id=entry_id, reason=reason)
-        await self.redis.xadd(self.dead_letter_stream, entry)
-        await self.redis.xack(self.stream, self.group, entry_id)
+        async with self.redis.pipeline(transaction=True) as pipe:
+            pipe.xadd(self.dead_letter_stream, entry)
+            pipe.xack(self.stream, self.group, entry_id)
+            await pipe.execute()
         logger.error("[streams] Dead-lettered entry %s: %s", entry_id, reason)
+
+
+class TaskEventConsumer(Protocol):
+    async def run(self, stop: asyncio.Event, ready: asyncio.Event | None = None) -> None: ...
+
+
+async def run_until_stopped(
+    consumer: TaskEventConsumer, stop: asyncio.Event, retry_delay: float = 2.0
+) -> None:
+    """Run the consumer until `stop` is set, restarting it after any Redis error.
+
+    A lost connection, Redis refusing writes (OOM, read-only replica), or any other Redis
+    error is logged and retried after `retry_delay` seconds. A long-running worker should
+    wait for Redis to recover, not exit and leave events unprocessed.
+    """
+    while not stop.is_set():
+        try:
+            await consumer.run(stop)
+        except (RedisError, OSError):
+            logger.exception("Consumer stopped on a Redis error; restarting in %ss", retry_delay)
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=retry_delay)
+            except TimeoutError:
+                pass

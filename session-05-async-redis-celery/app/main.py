@@ -16,9 +16,13 @@ configure_logging()
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan context manager."""
     await init_mongo_indexes()
-    yield
-    await close_mongo_client()
-    await close_redis_client()
+    try:
+        yield
+    finally:
+        try:
+            await close_mongo_client()
+        finally:
+            await close_redis_client()
 
 
 app = FastAPI(title="session-05-async-redis-celery", lifespan=lifespan)

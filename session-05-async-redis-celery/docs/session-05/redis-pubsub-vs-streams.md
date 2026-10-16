@@ -50,6 +50,7 @@ The rest of this document shows, with real runs, what that difference means for 
 
 | Trigger | Event type | `data` |
 | :--- | :--- | :--- |
+| `POST /tasks` creates a task with an assignee | `task.assigned` | `previous_assignee_id` (null), `new_assignee_id` |
 | `PATCH /tasks/{id}/status` changes the status | `task.status_changed` | `previous_status`, `new_status` |
 | `POST /tasks/{id}/assign` changes the status | `task.status_changed` | `previous_status`, `new_status` |
 | `POST /tasks/{id}/assign` sets a new assignee | `task.assigned` | `previous_assignee_id`, `new_assignee_id` |
@@ -151,12 +152,20 @@ JSON. A stream entry stores it as `{"event_type": ..., "payload": <json>}`. The 
     (`XPENDING` + `XCLAIM`) entries that have been idle that long, for example ones left by a
     consumer that died. A consumer restarted under the same name
     (`make events-streams NAME=worker-1`) also retries its own pending entries immediately on
-    startup. Without `NAME`, each process is named `<host>-<pid>`, so two consumers on one
-    machine never share a name and never take over each other's in-flight entries.
+    startup, however many there are. Without `NAME`, each process is named `<host>-<pid>`,
+    so two consumers on one machine never share a name and never take over each other's
+    in-flight entries. The cost is that each restart joins the group as a new consumer.
+    Old names stay listed in `XINFO CONSUMERS` (their pending entries are still reclaimed
+    after 30 s). Remove them with `XGROUP DELCONSUMER` once they show `pending 0`, or use a
+    fixed `NAME` per worker.
   - **Processing raises.** The entry is not acknowledged and is retried the same way.
   - **Poison message.** After `max_deliveries` (5) attempts, or if the payload is invalid,
-    the entry is copied to `taskflow:task-events:dead-letter` and acknowledged. One bad event
-    cannot block the rest.
+    the entry is copied to `taskflow:task-events:dead-letter` and acknowledged in one
+    `MULTI`/`EXEC` transaction, so it cannot end up dead-lettered twice. One bad event cannot
+    block the rest.
+  - **Redis errors.** If Redis drops the connection or refuses a command (for example
+    `OOM` when it is full), the worker logs the error and restarts its loop after 2 s. It
+    does not exit, which would leave events unprocessed until someone noticed.
 - The group is created at id `0` rather than `$`, so events published before the group
   existed are processed too.
 - If the stream or the group disappears while a consumer runs (`DEL`, `FLUSHDB`, or Redis
@@ -343,11 +352,12 @@ Settings (`.env` / environment): `REDIS_URL`, plus `TASK_EVENTS_CHANNEL`,
 | File | Covers |
 | :--- | :--- |
 | `tests/unit/events/test_task_event_schema.py` | Payload fields, assigned vs unassigned, unique ids, request id, JSON round trip |
+| `tests/unit/app/test_lifespan.py` | Shutdown closes Redis even if closing Mongo fails |
 | `tests/unit/db/test_redis_client.py` | The API's Redis client fails fast; clients of closed event loops are dropped; the test database URL keeps credentials and options |
 | `tests/integration/events/test_publisher.py` | Stream entry written, subscriber receives, dropped with no subscriber, ordering, Redis outage swallowed, unreachable Redis costs under 3 s, a failed XADD is reported per event and transport |
 | `tests/integration/events/test_pubsub_consumer.py` | Online consumer processes; offline events lost; same event twice applied once; malformed message dropped; connection closed even when unsubscribe fails |
-| `tests/integration/events/test_stream_consumer.py` | Offline backlog processed and acked; crash before XACK redelivered and skipped; republished event applied once; failure retried; max deliveries and malformed entries dead-lettered; deleted group recreated; trimmed pending entry reported, but not one claimed by another consumer; timeline capped |
-| `tests/integration/api/test_task_events_api.py` | API status change, assignment, unassignment, and combined changes publish the right events; rejected, no-op, or rolled-back changes publish nothing; Redis outage does not fail the request |
+| `tests/integration/events/test_stream_consumer.py` | Offline backlog processed and acked; crash before XACK redelivered and skipped; republished event applied once; failure retried; max deliveries and malformed entries dead-lettered; deleted group recreated; trimmed pending entry reported, but not one claimed by another consumer; timeline capped; a pending backlog larger than one page recovered in one call, each failing entry retried once per call; worker restarts after any Redis error but not after a programming error |
+| `tests/integration/api/test_task_events_api.py` | API status change, assignment, unassignment, and combined changes publish the right events; rejected, no-op, or rolled-back changes publish nothing; Redis outage does not fail the request; creating a task with an assignee publishes `task.assigned` |
 
 The tests use Redis logical database 15 (see `tests/fixtures/redis.py`), which is flushed
 around each test.

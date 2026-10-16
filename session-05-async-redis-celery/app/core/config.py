@@ -1,6 +1,6 @@
 """Application settings loaded from the environment."""
 
-from pydantic import MongoDsn, PostgresDsn, model_validator
+from pydantic import MongoDsn, PostgresDsn, RedisDsn, model_validator
 from taskflow_shared.config import BaseAppSettings
 from taskflow_shared.enums.common import Environment
 
@@ -11,6 +11,15 @@ class Settings(BaseAppSettings):
     database_url: PostgresDsn
     mongo_url: MongoDsn
     mongo_db: str
+
+    # Redis: task events are published to a Pub/Sub channel and a Stream side by side
+    # (see docs/session-05/redis-pubsub-vs-streams.md).
+    redis_url: RedisDsn = RedisDsn("redis://localhost:6379/0")
+    task_events_channel: str = "taskflow:task-events"
+    task_events_stream: str = "taskflow:task-events:stream"
+    task_events_stream_group: str = "task-event-processors"
+    task_events_stream_maxlen: int = 10_000
+    task_events_dead_letter_stream: str = "taskflow:task-events:dead-letter"
 
     # JWT access tokens. Override jwt_secret_key via the environment in production.
     jwt_secret_key: str = "dev-only-secret-change-in-production"

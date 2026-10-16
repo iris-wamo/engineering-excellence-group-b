@@ -8,10 +8,20 @@ from pymongo import AsyncMongoClient
 from pymongo.asynchronous.collection import AsyncCollection
 
 from app.core.config import settings
+from app.db.loop_clients import LoopClients
 
 logger = logging.getLogger(__name__)
 
-_mongo_clients: dict[asyncio.AbstractEventLoop, AsyncMongoClient[dict[str, Any]]] = {}
+
+def _create_mongo_client() -> AsyncMongoClient[dict[str, Any]]:
+    return AsyncMongoClient(
+        str(settings.mongo_url),
+        serverSelectionTimeoutMS=5000,
+        tz_aware=True,
+    )
+
+
+_mongo_clients: LoopClients[AsyncMongoClient[dict[str, Any]]] = LoopClients(_create_mongo_client)
 _default_client: AsyncMongoClient[dict[str, Any]] | None = None
 
 
@@ -23,23 +33,11 @@ def get_mongo_client() -> AsyncMongoClient[dict[str, Any]]:
         loop = None
 
     if loop is not None:
-        client = _mongo_clients.get(loop)
-        if client is None:
-            client = AsyncMongoClient(
-                str(settings.mongo_url),
-                serverSelectionTimeoutMS=5000,
-                tz_aware=True,
-            )
-            _mongo_clients[loop] = client
-        return client
+        return _mongo_clients.get(loop)
 
     global _default_client
     if _default_client is None:
-        _default_client = AsyncMongoClient(
-            str(settings.mongo_url),
-            serverSelectionTimeoutMS=5000,
-            tz_aware=True,
-        )
+        _default_client = _create_mongo_client()
     return _default_client
 
 
@@ -70,7 +68,7 @@ async def close_mongo_client() -> None:
     """Close the AsyncMongoClient connection for the current loop if open."""
     try:
         loop = asyncio.get_running_loop()
-        client = _mongo_clients.pop(loop, None)
+        client = _mongo_clients.pop(loop)
         if client is not None:
             await client.close()
     except RuntimeError:

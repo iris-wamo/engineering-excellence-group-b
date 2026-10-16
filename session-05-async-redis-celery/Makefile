@@ -5,6 +5,7 @@ include makefiles/seed.mk
 include makefiles/quality.mk
 include makefiles/testing.mk
 include makefiles/docker.mk
+include makefiles/events.mk
 
 .PHONY: help
 help: ## List all available targets grouped by section
@@ -24,6 +25,8 @@ help: ## List all available targets grouped by section
 			section="Testing & Coverage"; \
 		elif [ "$$short_name" = "docker" ]; then \
 			section="Docker & Containerization"; \
+		elif [ "$$short_name" = "events" ]; then \
+			section="Task Events (Redis)"; \
 		else \
 			section="$$short_name"; \
 		fi; \

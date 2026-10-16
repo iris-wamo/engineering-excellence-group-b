@@ -7,6 +7,7 @@ from taskflow_shared.logging import RequestIdMiddleware, configure_logging
 from app.api.v1 import api_router
 from app.core.exceptions import register_exception_handlers
 from app.db.mongo import close_mongo_client, init_mongo_indexes
+from app.db.redis import close_redis_client
 
 configure_logging()
 
@@ -17,6 +18,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await init_mongo_indexes()
     yield
     await close_mongo_client()
+    await close_redis_client()
 
 
 app = FastAPI(title="session-05-async-redis-celery", lifespan=lifespan)

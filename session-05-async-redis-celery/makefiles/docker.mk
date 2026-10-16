@@ -7,7 +7,7 @@ docker-build: ## Build Docker images
 	docker compose build
 
 .PHONY: docker-up
-docker-up: ## Start application and database
+docker-up: ## Start application, Postgres, MongoDB, and Redis
 	docker compose up -d
 
 .PHONY: docker-down
@@ -21,3 +21,7 @@ docker-logs: ## Show application logs
 .PHONY: docker-shell
 docker-shell: ## Open shell inside API container
 	docker compose exec api sh
+
+.PHONY: redis-cli
+redis-cli: ## Open a redis-cli shell on the Dockerized Redis
+	docker compose exec redis redis-cli

@@ -19,3 +19,11 @@ services:
       - --port
       - "8000"
       - --reload
+
+  celery-worker:
+    volumes:
+      - ./app:/app/app
+      - ./packages:/app/packages
+      - ./alembic:/app/alembic
+      - ./alembic.ini:/app/alembic.ini
+

@@ -124,6 +124,8 @@ async def test_due_task_reminders_filters_and_delivers(
     assert notif.payload is not None
     assert notif.payload["task_id"] == task_due_today.id
     assert notif.payload["task_title"] == "Deploy Monitoring"
+    assert notif.payload["workspace_id"] == 1
+    assert notif.payload["project_id"] == beat_test_setup["project"].id
 
 
 @pytest.mark.integration

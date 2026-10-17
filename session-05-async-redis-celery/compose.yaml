@@ -122,6 +122,8 @@ services:
       CELERY_RESULT_BACKEND: redis://redis:6379/2
 
     depends_on:
+      db:
+        condition: service_healthy
       redis:
         condition: service_healthy
 
@@ -144,8 +146,11 @@ services:
       CELERY_RESULT_BACKEND: redis://redis:6379/2
 
     depends_on:
+      db:
+        condition: service_healthy
       redis:
         condition: service_healthy
+
 
     healthcheck:
       disable: true

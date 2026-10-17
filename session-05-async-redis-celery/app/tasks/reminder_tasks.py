@@ -26,15 +26,17 @@ async def _execute_due_task_reminders(
     db: AsyncSession,
     threshold_days: int = 1,
     dedup_window_hours: int = 24,
+    overdue_cutoff_days: int = 14,
 ) -> dict[str, Any]:
     """Inspect tasks close to their due date and stage reminder notifications.
 
     Filters for incomplete tasks assigned to a user whose due date is on or before
-    the threshold. Ensures assignees receive at most one reminder within the
-    deduplication window.
+    the threshold. Uses batch querying to prevent N+1 database lookups and ensures
+    assignees receive at most one reminder within the deduplication window.
     """
     today = date.today()
     max_due = today + timedelta(days=threshold_days)
+    min_due = today - timedelta(days=overdue_cutoff_days)
 
     stmt = (
         select(TaskModel)
@@ -42,6 +44,7 @@ async def _execute_due_task_reminders(
             TaskModel.due_date.is_not(None),
             TaskModel.assignee_id.is_not(None),
             TaskModel.status != TaskStatus.done,
+            TaskModel.due_date >= min_due,
             TaskModel.due_date <= max_due,
         )
         .order_by(TaskModel.due_date.asc(), TaskModel.id.asc())
@@ -54,24 +57,30 @@ async def _execute_due_task_reminders(
 
     cutoff = datetime.now(UTC) - timedelta(hours=dedup_window_hours)
 
+    # Batch-fetch all task IDs that were already reminded in the deduplication window
+    candidate_task_ids = [t.id for t in tasks]
+    already_reminded_task_ids: set[int] = set()
+    if candidate_task_ids:
+        existing_notifs = (
+            await db.scalars(
+                select(Notification.task_id).where(
+                    Notification.task_id.in_(candidate_task_ids),
+                    Notification.type == "TASK_DUE_REMINDER",
+                    Notification.created_at >= cutoff,
+                )
+            )
+        ).all()
+        already_reminded_task_ids = {nid for nid in existing_notifs if nid is not None}
+
     for task in tasks:
         assert task.assignee_id is not None  # Guaranteed by query filter
-        # Check if reminder already sent in dedup window
-        check_stmt = select(Notification).where(
-            Notification.task_id == task.id,
-            Notification.recipient_id == task.assignee_id,
-            Notification.type == "TASK_DUE_REMINDER",
-            Notification.created_at >= cutoff,
-        )
-        existing = (await db.scalars(check_stmt)).first()
 
-        if existing:
+        if task.id in already_reminded_task_ids:
             reminders_skipped += 1
             logger.debug(
-                "Skipping reminder for task %s (recipient %s): already sent at %s",
+                "Skipping reminder for task %s (recipient %s): already sent in dedup window",
                 task.id,
                 task.assignee_id,
-                existing.created_at,
             )
             continue
 
@@ -87,6 +96,8 @@ async def _execute_due_task_reminders(
                 "is_overdue": task.due_date < today if task.due_date else False,
                 "priority": task.priority.value,
                 "status": task.status.value,
+                "workspace_id": task.workspace_id,
+                "project_id": task.project_id,
             },
         )
         db.add(notification)

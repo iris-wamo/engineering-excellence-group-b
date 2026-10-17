@@ -106,8 +106,53 @@ services:
     healthcheck:
       disable: true
 
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["celery", "-A", "app.core.celery_app", "beat", "-l", "info", "--schedule", "/tmp/celerybeat-schedule"]
+
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-taskflow}:${POSTGRES_PASSWORD:-taskflow}@db:5432/${POSTGRES_DB:-taskflow}
+      MONGO_URL: mongodb://mongo:27017
+      MONGO_DB: ${MONGO_DB:-taskflow}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+
+    depends_on:
+      redis:
+        condition: service_healthy
+
+    healthcheck:
+      disable: true
+
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["celery", "-A", "app.core.celery_app", "flower", "--port=5555"]
+
+    ports:
+      - "5555:5555"
+
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+
+    depends_on:
+      redis:
+        condition: service_healthy
+
+    healthcheck:
+      disable: true
+
 volumes:
   pgdata:
   mongodata:
   redisdata:
+
 

@@ -8,7 +8,10 @@ celery_app = Celery(
     "taskflow",
     broker=str(settings.celery_broker_url),
     backend=str(settings.celery_result_backend),
-    include=["app.tasks.notification_tasks"],
+    include=[
+        "app.tasks.notification_tasks",
+        "app.tasks.reminder_tasks",
+    ],
 )
 
 celery_app.conf.update(
@@ -24,6 +27,13 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     task_acks_late=True,
     task_reject_on_worker_lost=True,
+    beat_schedule={
+        "send-due-task-reminders-periodic": {
+            "task": "app.tasks.reminder_tasks.send_due_task_reminders",
+            "schedule": settings.celery_beat_schedule_interval_seconds,
+        },
+    },
 )
+
 
 celery_app.set_default()

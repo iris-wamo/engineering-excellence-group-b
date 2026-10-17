@@ -16,6 +16,9 @@ class Settings(BaseAppSettings):
     redis_url: RedisDsn = RedisDsn("redis://localhost:6379/0")
     celery_broker_url: str = "redis://localhost:6379/1"
     celery_result_backend: str = "redis://localhost:6379/2"
+    due_reminder_window_days: int = 1
+    celery_beat_schedule_interval_seconds: float = 60.0
+    flower_port: int = 5555
 
     # JWT access tokens. Override jwt_secret_key via the environment in production.
     jwt_secret_key: str = "dev-only-secret-change-in-production"

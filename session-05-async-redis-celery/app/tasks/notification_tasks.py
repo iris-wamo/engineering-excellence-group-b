@@ -235,7 +235,7 @@ async def _mark_notification_failed(
 
 @celery_app.task(
     bind=True,
-    name="tasks.send_task_assignment_notification",
+    name="app.tasks.notification_tasks.send_task_assignment_notification",
     max_retries=3,
     default_retry_delay=2,
 )

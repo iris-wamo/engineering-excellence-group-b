@@ -29,7 +29,10 @@ def test_exception_hierarchy() -> None:
 
 def test_task_configuration_attributes() -> None:
     """Verify task registration name, retry limits, and defaults."""
-    assert send_task_assignment_notification.name == "tasks.send_task_assignment_notification"
+    assert (
+        send_task_assignment_notification.name
+        == "app.tasks.notification_tasks.send_task_assignment_notification"
+    )
     assert send_task_assignment_notification.max_retries == 3
     assert send_task_assignment_notification.default_retry_delay == 2
 

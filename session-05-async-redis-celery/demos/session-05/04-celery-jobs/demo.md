@@ -31,7 +31,8 @@ Prove six core production behaviors:
 A team lead assigns a high-priority task to a developer. The API must respond in under 5ms.
 Behind the scenes:
 - A `pending` notification is recorded atomically with the task assignment in PostgreSQL.
-- A Celery job `tasks.send_task_assignment_notification` is queued in Redis broker.
+- A Celery job `app.tasks.notification_tasks.send_task_assignment_notification` is queued in Redis broker.
+
 - The worker executes the task, marks the notification `sent`, and acknowledges the message.
 - Network blips trigger retries without crashing the user's assignment.
 - Corrupted requests or missing IDs fail permanently and are audited in the database.

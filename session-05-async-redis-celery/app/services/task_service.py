@@ -305,6 +305,8 @@ class TaskService:
                     assigned_by_id=assigned_by_id,
                 )
             except Exception as exc:
+                # The notification record remains safely in 'pending' status in PostgreSQL
+                # (transactional outbox) so delivery can be retried or reconciled by sweeps.
                 logger.warning(
                     "Failed to queue assignment notification task for task %s to recipient %s: %s",
                     task.id,

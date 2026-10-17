@@ -21,3 +21,8 @@ docker-logs: ## Show application logs
 .PHONY: docker-shell
 docker-shell: ## Open shell inside API container
 	docker compose exec api sh
+
+.PHONY: redis-cli
+redis-cli: ## Open a redis-cli shell on the Dockerized Redis
+	docker compose exec redis redis-cli
+

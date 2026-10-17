@@ -1,3 +1,5 @@
+import logging
+
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,6 +29,8 @@ from app.schemas.task import (
     TaskStatusUpdate,
 )
 from app.workflows.task_workflow import TaskWorkflow
+
+logger = logging.getLogger(__name__)
 
 
 async def _get_project_or_404(
@@ -286,7 +290,28 @@ class TaskService:
 
             await db.commit()
             await db.refresh(task)
-            return TaskResponse.model_validate(task)
         except Exception:
             await db.rollback()
             raise
+
+        # 6. Queue background notification job after successful commit
+        if data.assignee_id is not None and assignee_changed:
+            try:
+                from app.tasks.notification_tasks import send_task_assignment_notification
+
+                send_task_assignment_notification.delay(
+                    task_id=task.id,
+                    recipient_id=data.assignee_id,
+                    assigned_by_id=assigned_by_id,
+                )
+            except Exception as exc:
+                # The notification record remains safely in 'pending' status in PostgreSQL
+                # (transactional outbox) so delivery can be retried or reconciled by sweeps.
+                logger.warning(
+                    "Failed to queue assignment notification task for task %s to recipient %s: %s",
+                    task.id,
+                    data.assignee_id,
+                    exc,
+                )
+
+        return TaskResponse.model_validate(task)

@@ -10,7 +10,8 @@ Architectural details: [`docs/session-05/celery-jobs.md`](../../../docs/session-
 ---
 
 ## Loom Video
-- Loom Video: `[Link to be added after recording demo walkthrough]`
+- Part 1: https://www.loom.com/share/e7cc1f3228ed4467a5273087d2e17915
+- Part 2: https://www.loom.com/share/2f01b3b8d3794cbcb0c02f32f8202b66
 
 ---
 
@@ -187,39 +188,40 @@ Permanent failure for notification 999999: Notification with id 999999 not found
 ```text
 $ uv run pytest tests/unit/test_celery_notification_tasks.py tests/integration/services/test_celery_assignment_flow.py -v
 
-collected 30 items
+collected 31 items
 tests/unit/test_celery_notification_tasks.py::test_exception_hierarchy PASSED [  3%]
 tests/unit/test_celery_notification_tasks.py::test_task_configuration_attributes PASSED [  6%]
-tests/unit/test_celery_notification_tasks.py::test_permanent_failure_does_not_retry PASSED [ 10%]
-tests/unit/test_celery_notification_tasks.py::test_transient_failure_retries_with_backoff PASSED [ 13%]
+tests/unit/test_celery_notification_tasks.py::test_permanent_failure_does_not_retry PASSED [  9%]
+tests/unit/test_celery_notification_tasks.py::test_transient_failure_retries_with_backoff PASSED [ 12%]
 tests/unit/test_celery_notification_tasks.py::test_operational_error_retries_with_backoff PASSED [ 16%]
-tests/unit/test_celery_notification_tasks.py::test_transient_failure_exhausts_retries_and_marks_failed PASSED [ 20%]
-tests/unit/test_celery_notification_tasks.py::test_non_transient_errors_are_not_retried_and_mark_failed[integrity-error] PASSED [ 23%]
-tests/unit/test_celery_notification_tasks.py::test_non_transient_errors_are_not_retried_and_mark_failed[dbapi-error-not-invalidated] PASSED [ 26%]
-tests/unit/test_celery_notification_tasks.py::test_non_transient_errors_are_not_retried_and_mark_failed[unexpected-error] PASSED [ 30%]
-tests/unit/test_celery_notification_tasks.py::test_connection_level_errors_are_retried[dbapi-error-connection-invalidated] PASSED [ 33%]
-tests/unit/test_celery_notification_tasks.py::test_connection_level_errors_are_retried[connection-refused] PASSED [ 36%]
-tests/unit/test_celery_notification_tasks.py::test_connection_level_errors_are_retried[timeout] PASSED [ 40%]
-tests/unit/test_celery_notification_tasks.py::test_process_assignment_notification_simulate_permanent_failure PASSED [ 43%]
-tests/unit/test_celery_notification_tasks.py::test_process_assignment_notification_simulate_transient_failure PASSED [ 46%]
-tests/integration/services/test_celery_assignment_flow.py::test_assign_task_triggers_celery_job PASSED [ 50%]
-tests/integration/services/test_celery_assignment_flow.py::test_assign_task_broker_down_graceful_degradation PASSED [ 53%]
-tests/integration/services/test_celery_assignment_flow.py::test_process_assignment_notification_success PASSED [ 56%]
-tests/integration/services/test_celery_assignment_flow.py::test_process_assignment_notification_idempotent_duplicate PASSED [ 60%]
-tests/integration/services/test_celery_assignment_flow.py::test_process_assignment_notification_entity_validations PASSED [ 63%]
-tests/integration/services/test_celery_assignment_flow.py::test_mark_notification_failed PASSED [ 66%]
-tests/integration/services/test_celery_assignment_flow.py::test_reassignment_back_to_earlier_assignee_delivers_new_notification PASSED [ 70%]
-tests/integration/services/test_celery_assignment_flow.py::test_mark_notification_failed_only_touches_that_row PASSED [ 73%]
-tests/integration/services/test_celery_assignment_flow.py::test_stale_pending_sweep_claims_only_old_pending_assignments PASSED [ 76%]
+tests/unit/test_celery_notification_tasks.py::test_transient_failure_exhausts_retries_and_marks_failed PASSED [ 19%]
+tests/unit/test_celery_notification_tasks.py::test_non_transient_errors_are_not_retried_and_mark_failed[integrity-error] PASSED [ 22%]
+tests/unit/test_celery_notification_tasks.py::test_non_transient_errors_are_not_retried_and_mark_failed[dbapi-error-not-invalidated] PASSED [ 25%]
+tests/unit/test_celery_notification_tasks.py::test_non_transient_errors_are_not_retried_and_mark_failed[unexpected-error] PASSED [ 29%]
+tests/unit/test_celery_notification_tasks.py::test_connection_level_errors_are_retried[dbapi-error-connection-invalidated] PASSED [ 32%]
+tests/unit/test_celery_notification_tasks.py::test_connection_level_errors_are_retried[connection-refused] PASSED [ 35%]
+tests/unit/test_celery_notification_tasks.py::test_connection_level_errors_are_retried[timeout] PASSED [ 38%]
+tests/unit/test_celery_notification_tasks.py::test_process_assignment_notification_simulate_permanent_failure PASSED [ 41%]
+tests/unit/test_celery_notification_tasks.py::test_process_assignment_notification_simulate_transient_failure PASSED [ 45%]
+tests/integration/services/test_celery_assignment_flow.py::test_assign_task_triggers_celery_job PASSED [ 48%]
+tests/integration/services/test_celery_assignment_flow.py::test_assign_task_broker_down_graceful_degradation PASSED [ 51%]
+tests/integration/services/test_celery_assignment_flow.py::test_process_assignment_notification_success PASSED [ 54%]
+tests/integration/services/test_celery_assignment_flow.py::test_process_assignment_notification_idempotent_duplicate PASSED [ 58%]
+tests/integration/services/test_celery_assignment_flow.py::test_process_assignment_notification_entity_validations PASSED [ 61%]
+tests/integration/services/test_celery_assignment_flow.py::test_mark_notification_failed PASSED [ 64%]
+tests/integration/services/test_celery_assignment_flow.py::test_reassignment_back_to_earlier_assignee_delivers_new_notification PASSED [ 67%]
+tests/integration/services/test_celery_assignment_flow.py::test_mark_notification_failed_only_touches_that_row PASSED [ 70%]
+tests/integration/services/test_celery_assignment_flow.py::test_stale_pending_sweep_claims_only_old_pending_assignments PASSED [ 74%]
+tests/integration/services/test_celery_assignment_flow.py::test_stale_pending_sweep_counts_only_published_rows PASSED [ 77%]
 tests/integration/services/test_celery_assignment_flow.py::test_stale_pending_sweep_gives_up_after_max_attempts PASSED [ 80%]
-tests/integration/services/test_celery_assignment_flow.py::test_requeue_stale_assignment_notifications_publishes_each_row PASSED [ 83%]
-tests/integration/services/test_celery_assignment_flow.py::test_reassignment_cancels_previous_assignees_pending_notification PASSED [ 86%]
+tests/integration/services/test_celery_assignment_flow.py::test_requeue_stale_assignment_notifications_publishes_through_the_broker PASSED [ 83%]
+tests/integration/services/test_celery_assignment_flow.py::test_reassignment_cancels_previous_assignees_pending_notification PASSED [ 87%]
 tests/integration/services/test_celery_assignment_flow.py::test_reassignment_keeps_already_sent_notification PASSED [ 90%]
 tests/integration/services/test_celery_assignment_flow.py::test_unassignment_cancels_pending_notification PASSED [ 93%]
 tests/integration/services/test_celery_assignment_flow.py::test_create_task_with_assignee_stages_and_dispatches_notification PASSED [ 96%]
 tests/integration/services/test_celery_assignment_flow.py::test_create_task_without_assignee_has_no_notification PASSED [100%]
 
-============================== 30 passed in 2.55s ==============================
+============================== 31 passed in 2.55s ==============================
 ```
 
 ---

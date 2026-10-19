@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 from sqlalchemy import select
@@ -26,6 +26,7 @@ from app.tasks.notification_tasks import (
     _mark_notification_failed,
     _process_assignment_notification,
     _process_stale_pending_notifications,
+    enqueue_assignment_notification,
     requeue_stale_assignment_notifications,
 )
 
@@ -414,6 +415,7 @@ def _notification(
 async def test_stale_pending_sweep_claims_only_old_pending_assignments(
     db_session: AsyncSession,
     assignment_setup: dict[str, Any],
+    broker_publish: MagicMock,
 ) -> None:
     """The sweep re-queues pending TASK_ASSIGNED rows untouched past the cutoff, once."""
     task_id = assignment_setup["task"].id
@@ -429,19 +431,66 @@ async def test_stale_pending_sweep_claims_only_old_pending_assignments(
     await db_session.flush()
 
     claimed = await _process_stale_pending_notifications(
-        older_than_minutes=5, limit=100, max_attempts=10, db=db_session
+        older_than_minutes=5,
+        limit=100,
+        max_attempts=10,
+        publish=enqueue_assignment_notification,
+        db=db_session,
     )
 
-    assert claimed == {"requeued": [stale.id], "given_up": []}
+    assert claimed == {"requeued": [stale.id], "given_up": [], "not_published": []}
+    assert broker_publish.call_args_list == [
+        call(kwargs={"notification_id": stale.id}, retry=False)
+    ]
     await db_session.refresh(stale)
     assert stale.payload == {"requeue_count": 1}
     assert stale.updated_at > old
 
-    # The claim refreshed updated_at, so the next sweep in the same window skips the row
+    # The re-queue refreshed updated_at, so the next sweep in the same window skips the row
     claimed_again = await _process_stale_pending_notifications(
-        older_than_minutes=5, limit=100, max_attempts=10, db=db_session
+        older_than_minutes=5,
+        limit=100,
+        max_attempts=10,
+        publish=enqueue_assignment_notification,
+        db=db_session,
     )
-    assert claimed_again == {"requeued": [], "given_up": []}
+    assert claimed_again == {"requeued": [], "given_up": [], "not_published": []}
+
+
+@pytest.mark.asyncio
+async def test_stale_pending_sweep_counts_only_published_rows(
+    db_session: AsyncSession,
+    assignment_setup: dict[str, Any],
+) -> None:
+    """A failed publish is not an attempt: it and the rest of the batch stay untouched."""
+    task_id = assignment_setup["task"].id
+    user_id = assignment_setup["assignee"].id
+    old = datetime.now(UTC) - timedelta(minutes=30)
+    rows = [_notification(task_id, user_id, "pending", old) for _ in range(3)]
+    db_session.add_all(rows)
+    await db_session.flush()
+    first, second, third = (row.id for row in rows)
+
+    publish = MagicMock(side_effect=[None, ConnectionError("Redis unavailable")])
+    claimed = await _process_stale_pending_notifications(
+        older_than_minutes=5, limit=100, max_attempts=10, publish=publish, db=db_session
+    )
+
+    # Publishing stops at the first broker failure
+    assert claimed == {"requeued": [first], "given_up": [], "not_published": [second, third]}
+    assert publish.call_args_list == [call(first), call(second)]
+    for row in rows:
+        await db_session.refresh(row)
+    assert rows[0].payload == {"requeue_count": 1}
+    for unpublished in rows[1:]:
+        assert unpublished.payload is None
+        assert unpublished.updated_at == old  # still eligible for the next sweep
+
+    # Once the broker is back, the next sweep picks up exactly the unpublished rows
+    retry = await _process_stale_pending_notifications(
+        older_than_minutes=5, limit=100, max_attempts=10, publish=MagicMock(), db=db_session
+    )
+    assert retry == {"requeued": [second, third], "given_up": [], "not_published": []}
 
 
 @pytest.mark.asyncio
@@ -457,41 +506,35 @@ async def test_stale_pending_sweep_gives_up_after_max_attempts(
     db_session.add(exhausted)
     await db_session.flush()
 
+    publish = MagicMock()
     claimed = await _process_stale_pending_notifications(
-        older_than_minutes=5, limit=100, max_attempts=3, db=db_session
+        older_than_minutes=5, limit=100, max_attempts=3, publish=publish, db=db_session
     )
 
-    assert claimed == {"requeued": [], "given_up": [exhausted.id]}
+    assert claimed == {"requeued": [], "given_up": [exhausted.id], "not_published": []}
+    publish.assert_not_called()
     await db_session.refresh(exhausted)
     assert exhausted.status == "failed"
     assert exhausted.payload is not None
     assert "3 re-queues" in exhausted.payload["error"]
 
 
-def test_requeue_stale_assignment_notifications_publishes_each_row() -> None:
-    """The Beat task re-publishes every claimed row, keyed by notification id."""
-    with (
-        patch(
-            "app.tasks.notification_tasks.run_async",
-            side_effect=_close_and_return({"requeued": [7, 9], "given_up": [3]}),
-        ),
-        patch(APPLY_ASYNC) as mock_apply_async,
-    ):
+def test_requeue_stale_assignment_notifications_publishes_through_the_broker() -> None:
+    """The Beat task hands the sweep the real publisher and reports every outcome."""
+    claimed = {"requeued": [7, 9], "given_up": [3], "not_published": [11]}
+    with patch(
+        "app.tasks.notification_tasks._process_stale_pending_notifications",
+        new=AsyncMock(return_value=claimed),
+    ) as mock_process:
         result = requeue_stale_assignment_notifications()
 
-    assert result == {"requeued": 2, "notification_ids": [7, 9], "given_up": [3]}
-    assert mock_apply_async.call_args_list == [
-        call(kwargs={"notification_id": 7}, retry=False),
-        call(kwargs={"notification_id": 9}, retry=False),
-    ]
-
-
-def _close_and_return(value: Any) -> Any:
-    def side_effect(coro: Any) -> Any:
-        coro.close()
-        return value
-
-    return side_effect
+    assert mock_process.call_args.kwargs["publish"] is enqueue_assignment_notification
+    assert result == {
+        "requeued": 2,
+        "notification_ids": [7, 9],
+        "given_up": [3],
+        "not_published": [11],
+    }
 
 
 async def _notification_statuses(db: AsyncSession, task_id: int) -> list[tuple[int, str]]:

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Header, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from taskflow_shared.enums import ImportStatus
 
+from app.auth.dependencies import OptionalCurrentUser
 from app.auth.permissions import (
     Permission,
     require_task_assignee,
@@ -40,9 +41,15 @@ async def create_task(
     payload: TaskCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
     workspace_id: CurrentWorkspaceId,
+    current_user: OptionalCurrentUser,
 ) -> TaskResponse:
     """Create a new task within the active workspace."""
-    return await TaskService.create_task(db, payload, workspace_id=workspace_id)
+    return await TaskService.create_task(
+        db,
+        payload,
+        workspace_id=workspace_id,
+        actor_id=current_user.id if current_user is not None else None,
+    )
 
 
 @router.post(

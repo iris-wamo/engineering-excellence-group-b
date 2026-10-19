@@ -20,6 +20,8 @@ class Settings(BaseAppSettings):
     notification_requeue_after_minutes: int = 5
     notification_requeue_interval_seconds: float = 300.0
     notification_requeue_batch_size: int = 100
+    # After this many re-publishes without delivery the row is marked 'failed'
+    notification_requeue_max_attempts: int = 10
     due_reminder_window_days: int = 1
     celery_beat_schedule_interval_seconds: float = 60.0
     flower_port: int = 5555

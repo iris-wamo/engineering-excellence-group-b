@@ -20,7 +20,7 @@ When notifications are delivered synchronously within an API endpoint:
 
 ### The Solution: Asynchronous Background Offloading
 TaskFlow decouples task state mutations from notification delivery:
-1. The API transaction validates membership, updates the task row, records assignment history, and writes a `pending` notification row in PostgreSQL.
+1. The API transaction validates membership, updates the task row, records assignment history, and writes a `pending` notification row in PostgreSQL. Creating a task with an `assignee_id` (`TaskService.create_task`) counts as an assignment and stages the same row. On reassignment or unassignment, the replaced assignee's undelivered `pending` row is set to `cancelled` in the same transaction.
 2. The transaction commits to PostgreSQL.
 3. Immediately **after commit**, the API publishes a background job carrying only the row's `notification_id` (`enqueue_assignment_notification`, which calls `apply_async(..., retry=False)`). Kombu publishes synchronously, so the service runs it in a thread via `asyncio.to_thread` and the event loop keeps serving other requests.
 4. The background Celery worker picks up the job from Redis, locks that notification row, delivers it, and transitions it from `pending` to `sent`.
@@ -155,6 +155,9 @@ The **notification row is the idempotency key**. `assign_task` flushes the `pend
    ```
 3. **Validate and Deliver**: Check the task and recipient exist and the task is still assigned to the recipient, then update the row in place to `status = "sent"`, enriching its payload (`dispatched: true`, `task_title`).
 
+### Superseded Assignments
+If a task is reassigned (or unassigned) before the previous assignee's job runs, `assign_task` sets that undelivered row to `cancelled` in the same transaction. The late job then returns `skipped` instead of failing with `InvalidAssignmentNotificationError`, so `failed` keeps meaning "delivery broke". Both sides lock the row, so a notification that was already `sent` is never cancelled.
+
 ### Why not key on `(task_id, recipient_id)`?
 An earlier version looked up all `TASK_ASSIGNED` rows for the task and recipient and skipped delivery if *any* was `sent`. For a task reassigned **A → B → A**, the second assignment to A found A's old `sent` row and returned `already_sent`, leaving the new `pending` row undelivered. Keying on the row id means each assignment gets exactly one delivery. `tests/integration/services/test_celery_assignment_flow.py::test_reassignment_back_to_earlier_assignee_delivers_new_notification` covers this case.
 
@@ -167,7 +170,7 @@ An earlier version looked up all `TASK_ASSIGNED` rows for the task and recipient
 | **Celery Worker is Down** | The API successfully commits the task assignment to PostgreSQL and pushes the job into Redis queue `celery`. The job sits safely in Redis memory. When a worker process starts, it immediately pops and processes all queued notifications without data loss. |
 | **Worker Crashes Mid-Task** | Because `task_acks_late=True` and `task_reject_on_worker_lost=True`, Redis holds the message until acknowledged. A surviving or restarted worker reclaims the message. Thanks to idempotency, partial work is reconciled without duplicates. |
 | **Redis Broker is Down** | The database transaction for task assignment has already committed. The publish runs in a thread with `retry=False` and 1s broker timeouts, so the request is delayed by about a second at most and the event loop is never blocked. The error is logged as a warning and the API returns HTTP 200. The notification stays `pending` in PostgreSQL until the outbox sweep re-publishes it. |
-| **Job Lost (publish failed, or message dropped)** | `requeue_stale_assignment_notifications` runs on Celery Beat every `notification_requeue_interval_seconds` (default 300s). It selects up to `notification_requeue_batch_size` (default 100) `TASK_ASSIGNED` rows still `pending` after `notification_requeue_after_minutes` (default 5) and re-publishes each one by `notification_id`. Re-publishing a row whose job is still in flight is safe because delivery locks the row and skips anything not `pending`. Rows marked `failed` are not re-sent automatically. |
+| **Job Lost (publish failed, or message dropped)** | `requeue_stale_assignment_notifications` runs on Celery Beat every `notification_requeue_interval_seconds` (default 300s). It locks (`FOR UPDATE SKIP LOCKED`) up to `notification_requeue_batch_size` (default 100) `TASK_ASSIGNED` rows still `pending` and untouched (`updated_at`) for `notification_requeue_after_minutes` (default 5), oldest first. It increments `payload.requeue_count` (which also refreshes `updated_at`, so each row is re-published at most once per window) and re-publishes each one by `notification_id`. After `notification_requeue_max_attempts` (default 10) re-queues the row is marked `failed` instead, so a long worker outage cannot grow the queue without bound. Re-publishing a row whose job is still in flight is safe because delivery locks the row and skips anything not `pending`. Rows marked `failed` are not re-sent automatically. |
 | **Database Outage During Worker Run** | The worker raises `OperationalError`, which is caught as a transient failure. Celery retries with exponential backoff up to 3 times while waiting for the database connection to recover. |
 
 ---
@@ -197,6 +200,8 @@ LRANGE celery 0 -1
 ```
 
 ### Running Test Suites
+An autouse `broker_publish` fixture in `tests/conftest.py` stubs `send_task_assignment_notification.apply_async` for every test, so running the suite never queues jobs (carrying test-DB ids) in your dev broker.
+
 ```bash
 # Unit tests (exception hierarchy, backoff calculation, retry limits, retry classification)
 uv run pytest tests/unit/test_celery_notification_tasks.py

@@ -87,6 +87,9 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
+    # Skip the image entrypoint's `alembic upgrade head`: only the api service migrates,
+    # so containers starting together never race on the same migration.
+    entrypoint: []
     command: ["celery", "-A", "app.core.celery_app", "worker", "-l", "info"]
 
     environment:

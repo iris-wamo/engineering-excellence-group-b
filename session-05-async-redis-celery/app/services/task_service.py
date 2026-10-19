@@ -1,7 +1,7 @@
 import asyncio
 import logging
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import (
@@ -107,10 +107,68 @@ async def verify_project_membership(db: AsyncSession, user_id: int, project_id: 
 _verify_project_membership = verify_project_membership
 
 
+def _stage_assignment_notification(
+    db: AsyncSession, task: Task, recipient_id: int, assigned_by_id: int | None
+) -> Notification:
+    """Add a 'pending' outbox row for an assignment to the current transaction."""
+    notification = Notification(
+        recipient_id=recipient_id,
+        task_id=task.id,
+        type="TASK_ASSIGNED",
+        status="pending",
+        payload={
+            "task_id": task.id,
+            "task_title": task.title,
+            "assigned_by_id": assigned_by_id,
+        },
+    )
+    db.add(notification)
+    return notification
+
+
+async def _cancel_pending_assignment_notifications(
+    db: AsyncSession, task_id: int, recipient_id: int
+) -> None:
+    """Cancel undelivered assignment notifications for an assignee who was replaced.
+
+    The worker locks the row before delivering, so a row it already sent stays 'sent'.
+    """
+    await db.execute(
+        update(Notification)
+        .where(
+            Notification.task_id == task_id,
+            Notification.recipient_id == recipient_id,
+            Notification.type == "TASK_ASSIGNED",
+            Notification.status == "pending",
+        )
+        .values(status="cancelled")
+    )
+
+
+async def _dispatch_assignment_notification(notification_id: int, task_id: int) -> None:
+    """Publish the delivery job after commit. Never raises: the row stays 'pending' in
+    PostgreSQL (transactional outbox) and the requeue_stale_assignment_notifications Beat
+    sweep re-publishes it. The publish is blocking, so it runs off the event loop."""
+    try:
+        from app.tasks.notification_tasks import enqueue_assignment_notification
+
+        await asyncio.to_thread(enqueue_assignment_notification, notification_id)
+    except Exception as exc:
+        logger.warning(
+            "Failed to queue assignment notification %s for task %s: %s",
+            notification_id,
+            task_id,
+            exc,
+        )
+
+
 class TaskService:
     @staticmethod
     async def create_task(
-        db: AsyncSession, data: TaskCreate, workspace_id: int = 1
+        db: AsyncSession,
+        data: TaskCreate,
+        workspace_id: int = 1,
+        actor_id: int | None = None,
     ) -> TaskResponse:
         project = await _get_project_or_404(db, data.project_id, workspace_id=workspace_id)
         if data.assignee_id is not None:
@@ -129,7 +187,23 @@ class TaskService:
             status=TaskStatus.todo,
             workspace_id=project.workspace_id,
         )
+        # Creating a task with an assignee is an assignment too: stage its outbox row in
+        # the same transaction (TaskRepository.create commits both).
+        notification_id: int | None = None
+        if data.assignee_id is not None:
+            try:
+                db.add(task)
+                await db.flush()
+                notification = _stage_assignment_notification(db, task, data.assignee_id, actor_id)
+                await db.flush()
+                notification_id = notification.id
+            except Exception:
+                await db.rollback()
+                raise
         task = await TaskRepository.create(db, task)
+
+        if notification_id is not None:
+            await _dispatch_assignment_notification(notification_id, task.id)
         return TaskResponse.model_validate(task)
 
     @staticmethod
@@ -203,7 +277,8 @@ class TaskService:
         3. Status change via TaskWorkflow (only if status changes): validates the move and
            writes a TaskStatusHistory row plus a STATUS_CHANGED ActivityLog
         4. ActivityLog (TASK_ASSIGNED / TASK_UNASSIGNED audit log of the assignment)
-        5. Notification (pending outbox notification for new assignee)
+        5. Notification outbox: cancels the replaced assignee's pending notification and
+           adds a pending one for the new assignee
 
         If any error or simulated failure occurs, the entire transaction rolls back.
         """
@@ -268,22 +343,16 @@ class TaskService:
             )
             db.add(activity_log)
 
-            # 4. Notification record (pending outbox for new assignee). Flushed so its id
-            #    can be handed to the worker as the idempotency key.
+            # 4. Outbox: cancel the replaced assignee's undelivered notification, then add a
+            #    pending row for the new assignee. Flushed so its id can be handed to the
+            #    worker as the idempotency key.
             notification_id: int | None = None
+            if assignee_changed and previous_assignee_id is not None:
+                await _cancel_pending_assignment_notifications(db, task.id, previous_assignee_id)
             if data.assignee_id is not None and assignee_changed:
-                notification = Notification(
-                    recipient_id=data.assignee_id,
-                    task_id=task.id,
-                    type="TASK_ASSIGNED",
-                    status="pending",
-                    payload={
-                        "task_id": task.id,
-                        "task_title": task.title,
-                        "assigned_by_id": assigned_by_id,
-                    },
+                notification = _stage_assignment_notification(
+                    db, task, data.assignee_id, assigned_by_id
                 )
-                db.add(notification)
                 await db.flush()
                 notification_id = notification.id
 
@@ -299,21 +368,8 @@ class TaskService:
             await db.rollback()
             raise
 
-        # 6. Queue background notification job after successful commit. The publish is
-        #    blocking, so it runs off the event loop.
+        # 6. Queue background notification job after successful commit
         if notification_id is not None:
-            try:
-                from app.tasks.notification_tasks import enqueue_assignment_notification
-
-                await asyncio.to_thread(enqueue_assignment_notification, notification_id)
-            except Exception as exc:
-                # The row stays 'pending' in PostgreSQL (transactional outbox); the
-                # requeue_stale_assignment_notifications Beat sweep re-publishes it.
-                logger.warning(
-                    "Failed to queue assignment notification %s for task %s: %s",
-                    notification_id,
-                    task.id,
-                    exc,
-                )
+            await _dispatch_assignment_notification(notification_id, task.id)
 
         return TaskResponse.model_validate(task)

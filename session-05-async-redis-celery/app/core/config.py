@@ -20,6 +20,8 @@ class Settings(BaseAppSettings):
     notification_requeue_after_minutes: int = 5
     notification_requeue_interval_seconds: float = 300.0
     notification_requeue_batch_size: int = 100
+    # After this many re-publishes without delivery the row is marked 'failed'
+    notification_requeue_max_attempts: int = 10
 
     # JWT access tokens. Override jwt_secret_key via the environment in production.
     jwt_secret_key: str = "dev-only-secret-change-in-production"

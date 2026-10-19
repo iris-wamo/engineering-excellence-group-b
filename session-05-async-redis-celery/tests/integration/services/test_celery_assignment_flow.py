@@ -382,7 +382,8 @@ async def test_mark_notification_failed_only_touches_that_row(
 
     first = await db_session.get(Notification, first_a)
     second = await db_session.get(Notification, second_a)
-    assert first is not None and first.status == "pending"
+    # The reassignment to B cancelled A's first row; failing the second row leaves it alone
+    assert first is not None and first.status == "cancelled"
     assert second is not None and second.status == "failed"
 
     # A row that was already delivered is never flipped to failed
@@ -393,44 +394,92 @@ async def test_mark_notification_failed_only_touches_that_row(
     assert first.status == "sent"
 
 
+def _notification(
+    task_id: int,
+    recipient_id: int,
+    status: str,
+    updated_at: datetime | None = None,
+    type_: str = "TASK_ASSIGNED",
+    payload: dict[str, Any] | None = None,
+) -> Notification:
+    notification = Notification(
+        recipient_id=recipient_id, task_id=task_id, type=type_, status=status, payload=payload
+    )
+    if updated_at is not None:
+        notification.updated_at = updated_at
+    return notification
+
+
 @pytest.mark.asyncio
-async def test_stale_pending_sweep_finds_only_old_pending_assignments(
+async def test_stale_pending_sweep_claims_only_old_pending_assignments(
     db_session: AsyncSession,
     assignment_setup: dict[str, Any],
 ) -> None:
-    """The outbox sweep selects pending TASK_ASSIGNED rows older than the cutoff only."""
-    task = assignment_setup["task"]
-    assignee = assignment_setup["assignee"]
+    """The sweep re-queues pending TASK_ASSIGNED rows untouched past the cutoff, once."""
+    task_id = assignment_setup["task"].id
+    user_id = assignment_setup["assignee"].id
     old = datetime.now(UTC) - timedelta(minutes=30)
 
-    def row(status: str, created_at: datetime | None = None, type_: str = "TASK_ASSIGNED") -> Any:
-        n = Notification(recipient_id=assignee.id, task_id=task.id, type=type_, status=status)
-        if created_at is not None:
-            n.created_at = created_at
-        return n
-
-    stale = row("pending", old)
-    fresh = row("pending")
-    sent = row("sent", old)
-    failed = row("failed", old)
-    other_type = row("pending", old, type_="TASK_DUE_REMINDER")
+    stale = _notification(task_id, user_id, "pending", old)
+    fresh = _notification(task_id, user_id, "pending")
+    sent = _notification(task_id, user_id, "sent", old)
+    failed = _notification(task_id, user_id, "failed", old)
+    other_type = _notification(task_id, user_id, "pending", old, type_="TASK_DUE_REMINDER")
     db_session.add_all([stale, fresh, sent, failed, other_type])
     await db_session.flush()
 
-    ids = await _process_stale_pending_notifications(older_than_minutes=5, limit=100, db=db_session)
+    claimed = await _process_stale_pending_notifications(
+        older_than_minutes=5, limit=100, max_attempts=10, db=db_session
+    )
 
-    assert ids == [stale.id]
+    assert claimed == {"requeued": [stale.id], "given_up": []}
+    await db_session.refresh(stale)
+    assert stale.payload == {"requeue_count": 1}
+    assert stale.updated_at > old
+
+    # The claim refreshed updated_at, so the next sweep in the same window skips the row
+    claimed_again = await _process_stale_pending_notifications(
+        older_than_minutes=5, limit=100, max_attempts=10, db=db_session
+    )
+    assert claimed_again == {"requeued": [], "given_up": []}
+
+
+@pytest.mark.asyncio
+async def test_stale_pending_sweep_gives_up_after_max_attempts(
+    db_session: AsyncSession,
+    assignment_setup: dict[str, Any],
+) -> None:
+    """A row re-queued max_attempts times is marked failed instead of re-published again."""
+    task_id = assignment_setup["task"].id
+    user_id = assignment_setup["assignee"].id
+    old = datetime.now(UTC) - timedelta(minutes=30)
+    exhausted = _notification(task_id, user_id, "pending", old, payload={"requeue_count": 3})
+    db_session.add(exhausted)
+    await db_session.flush()
+
+    claimed = await _process_stale_pending_notifications(
+        older_than_minutes=5, limit=100, max_attempts=3, db=db_session
+    )
+
+    assert claimed == {"requeued": [], "given_up": [exhausted.id]}
+    await db_session.refresh(exhausted)
+    assert exhausted.status == "failed"
+    assert exhausted.payload is not None
+    assert "3 re-queues" in exhausted.payload["error"]
 
 
 def test_requeue_stale_assignment_notifications_publishes_each_row() -> None:
-    """The Beat task re-publishes every stale row it finds, keyed by notification id."""
+    """The Beat task re-publishes every claimed row, keyed by notification id."""
     with (
-        patch("app.tasks.notification_tasks.run_async", side_effect=_close_and_return([7, 9])),
+        patch(
+            "app.tasks.notification_tasks.run_async",
+            side_effect=_close_and_return({"requeued": [7, 9], "given_up": [3]}),
+        ),
         patch(APPLY_ASYNC) as mock_apply_async,
     ):
         result = requeue_stale_assignment_notifications()
 
-    assert result == {"requeued": 2, "notification_ids": [7, 9]}
+    assert result == {"requeued": 2, "notification_ids": [7, 9], "given_up": [3]}
     assert mock_apply_async.call_args_list == [
         call(kwargs={"notification_id": 7}, retry=False),
         call(kwargs={"notification_id": 9}, retry=False),
@@ -443,3 +492,134 @@ def _close_and_return(value: Any) -> Any:
         return value
 
     return side_effect
+
+
+async def _notification_statuses(db: AsyncSession, task_id: int) -> list[tuple[int, str]]:
+    rows = (
+        await db.execute(
+            select(Notification.recipient_id, Notification.status)
+            .where(Notification.task_id == task_id, Notification.type == "TASK_ASSIGNED")
+            .order_by(Notification.id)
+        )
+    ).all()
+    return [(recipient_id, status) for recipient_id, status in rows]
+
+
+@pytest.mark.asyncio
+async def test_reassignment_cancels_previous_assignees_pending_notification(
+    db_session: AsyncSession,
+    assignment_setup: dict[str, Any],
+) -> None:
+    """Reassigning before delivery cancels the old row instead of letting it fail later."""
+    task = assignment_setup["task"]
+    user_a = assignment_setup["assignee"]
+    user_b = assignment_setup["other_user"]
+    creator = assignment_setup["creator"]
+
+    await _assign(db_session, task.id, user_a.id, creator.id)
+    first_a = await _pending_notification_id(db_session, task.id, user_a.id)
+    await _assign(db_session, task.id, user_b.id, creator.id)
+
+    assert await _notification_statuses(db_session, task.id) == [
+        (user_a.id, "cancelled"),
+        (user_b.id, "pending"),
+    ]
+    # A late job for the cancelled row is a no-op, not a failure
+    result = await _process_assignment_notification(first_a, db=db_session)
+    assert result["status"] == "skipped"
+
+
+@pytest.mark.asyncio
+async def test_reassignment_keeps_already_sent_notification(
+    db_session: AsyncSession,
+    assignment_setup: dict[str, Any],
+) -> None:
+    """Only undelivered rows are cancelled; a delivered notification stays 'sent'."""
+    task = assignment_setup["task"]
+    user_a = assignment_setup["assignee"]
+    user_b = assignment_setup["other_user"]
+    creator = assignment_setup["creator"]
+
+    await _assign(db_session, task.id, user_a.id, creator.id)
+    first_a = await _pending_notification_id(db_session, task.id, user_a.id)
+    await _process_assignment_notification(first_a, db=db_session)
+    await _assign(db_session, task.id, user_b.id, creator.id)
+
+    assert await _notification_statuses(db_session, task.id) == [
+        (user_a.id, "sent"),
+        (user_b.id, "pending"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_unassignment_cancels_pending_notification(
+    db_session: AsyncSession,
+    assignment_setup: dict[str, Any],
+) -> None:
+    """Unassigning a task cancels its undelivered notification and queues nothing new."""
+    task = assignment_setup["task"]
+    user_a = assignment_setup["assignee"]
+    creator = assignment_setup["creator"]
+
+    await _assign(db_session, task.id, user_a.id, creator.id)
+    with patch(APPLY_ASYNC) as mock_apply_async:
+        await TaskService.assign_task(
+            db_session,
+            task_id=task.id,
+            data=TaskAssignRequest(assignee_id=None),
+            actor_id=creator.id,
+        )
+
+    mock_apply_async.assert_not_called()
+    assert await _notification_statuses(db_session, task.id) == [(user_a.id, "cancelled")]
+
+
+@pytest.mark.asyncio
+async def test_create_task_with_assignee_stages_and_dispatches_notification(
+    db_session: AsyncSession,
+    assignment_setup: dict[str, Any],
+) -> None:
+    """Creating a task with an assignee is an assignment: pending row plus queued job."""
+    assignee = assignment_setup["assignee"]
+    creator = assignment_setup["creator"]
+
+    with patch(APPLY_ASYNC) as mock_apply_async:
+        created = await TaskService.create_task(
+            db_session,
+            TaskCreate(
+                title="Created With Assignee",
+                project_id=assignment_setup["project"].id,
+                assignee_id=assignee.id,
+            ),
+            actor_id=creator.id,
+        )
+
+    notification = await db_session.scalar(
+        select(Notification).where(Notification.task_id == created.id)
+    )
+    assert notification is not None
+    assert notification.status == "pending"
+    assert notification.recipient_id == assignee.id
+    assert notification.payload == {
+        "task_id": created.id,
+        "task_title": "Created With Assignee",
+        "assigned_by_id": creator.id,
+    }
+    mock_apply_async.assert_called_once_with(
+        kwargs={"notification_id": notification.id}, retry=False
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_task_without_assignee_has_no_notification(
+    db_session: AsyncSession,
+    assignment_setup: dict[str, Any],
+) -> None:
+    with patch(APPLY_ASYNC) as mock_apply_async:
+        created = await TaskService.create_task(
+            db_session,
+            TaskCreate(title="Unassigned", project_id=assignment_setup["project"].id),
+        )
+
+    mock_apply_async.assert_not_called()
+    assert await _notification_statuses(db_session, created.id) == []

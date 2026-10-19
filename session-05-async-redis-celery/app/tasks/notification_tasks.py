@@ -250,35 +250,65 @@ def enqueue_assignment_notification(notification_id: int) -> None:
     )
 
 
-async def _find_stale_pending_notification_ids(
+async def _claim_stale_pending_notifications(
     db: AsyncSession,
     older_than_minutes: int,
     limit: int,
-) -> list[int]:
+    max_attempts: int,
+) -> dict[str, list[int]]:
+    """Pick pending assignment rows untouched for older_than_minutes and record a re-queue.
+
+    Bumping payload.requeue_count also refreshes updated_at, so a row is re-published at
+    most once per window, and the oldest-touched rows go first. Rows already re-queued
+    max_attempts times are marked 'failed' instead of being re-published forever.
+    """
     cutoff = datetime.now(UTC) - timedelta(minutes=older_than_minutes)
-    ids = await db.scalars(
-        select(Notification.id)
-        .where(
-            Notification.type == "TASK_ASSIGNED",
-            Notification.status == "pending",
-            Notification.created_at < cutoff,
+    notifications = (
+        await db.scalars(
+            select(Notification)
+            .where(
+                Notification.type == "TASK_ASSIGNED",
+                Notification.status == "pending",
+                Notification.updated_at < cutoff,
+            )
+            .order_by(Notification.updated_at.asc(), Notification.id.asc())
+            .limit(limit)
+            .with_for_update(skip_locked=True)
         )
-        .order_by(Notification.id.asc())
-        .limit(limit)
-    )
-    return list(ids.all())
+    ).all()
+
+    requeued: list[int] = []
+    given_up: list[int] = []
+    for notification in notifications:
+        payload = dict(notification.payload or {})
+        attempts = int(payload.get("requeue_count", 0))
+        if attempts >= max_attempts:
+            notification.status = "failed"
+            payload["error"] = f"Not delivered after {attempts} re-queues."
+            given_up.append(notification.id)
+        else:
+            payload["requeue_count"] = attempts + 1
+            requeued.append(notification.id)
+        notification.payload = payload
+
+    if notifications:
+        await db.commit()
+    return {"requeued": requeued, "given_up": given_up}
 
 
 async def _process_stale_pending_notifications(
     older_than_minutes: int,
     limit: int,
+    max_attempts: int,
     db: AsyncSession | None = None,
-) -> list[int]:
+) -> dict[str, list[int]]:
     if db is not None:
-        return await _find_stale_pending_notification_ids(db, older_than_minutes, limit)
+        return await _claim_stale_pending_notifications(db, older_than_minutes, limit, max_attempts)
 
     async with get_worker_db() as worker_db:
-        return await _find_stale_pending_notification_ids(worker_db, older_than_minutes, limit)
+        return await _claim_stale_pending_notifications(
+            worker_db, older_than_minutes, limit, max_attempts
+        )
 
 
 @celery_app.task(name="app.tasks.notification_tasks.requeue_stale_assignment_notifications")
@@ -289,19 +319,31 @@ def requeue_stale_assignment_notifications() -> dict[str, Any]:
     acks_late redelivery). Re-publishing a row that is still in flight is safe: the delivery
     job locks the row and skips anything no longer 'pending'.
     """
-    notification_ids = run_async(
+    claimed = run_async(
         _process_stale_pending_notifications(
             older_than_minutes=settings.notification_requeue_after_minutes,
             limit=settings.notification_requeue_batch_size,
+            max_attempts=settings.notification_requeue_max_attempts,
         )
     )
-    for notification_id in notification_ids:
+    for notification_id in claimed["requeued"]:
         enqueue_assignment_notification(notification_id)
 
-    if notification_ids:
+    if claimed["requeued"]:
         logger.warning(
             "Re-queued %s stale pending assignment notifications: %s",
-            len(notification_ids),
-            notification_ids,
+            len(claimed["requeued"]),
+            claimed["requeued"],
         )
-    return {"requeued": len(notification_ids), "notification_ids": notification_ids}
+    if claimed["given_up"]:
+        logger.error(
+            "Marked %s assignment notifications failed after %s re-queues: %s",
+            len(claimed["given_up"]),
+            settings.notification_requeue_max_attempts,
+            claimed["given_up"],
+        )
+    return {
+        "requeued": len(claimed["requeued"]),
+        "notification_ids": claimed["requeued"],
+        "given_up": claimed["given_up"],
+    }

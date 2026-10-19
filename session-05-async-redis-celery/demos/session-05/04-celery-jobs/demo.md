@@ -10,7 +10,8 @@ Architectural details: [`docs/session-05/celery-jobs.md`](../../../docs/session-
 ---
 
 ## Loom Video
-- Loom Video: `[Link to be added after recording demo walkthrough]`
+- Part 1: https://www.loom.com/share/e7cc1f3228ed4467a5273087d2e17915
+- Part 2: https://www.loom.com/share/2f01b3b8d3794cbcb0c02f32f8202b66
 
 ---
 

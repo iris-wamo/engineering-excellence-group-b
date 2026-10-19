@@ -20,10 +20,10 @@ When notifications are delivered synchronously within an API endpoint:
 
 ### The Solution: Asynchronous Background Offloading
 TaskFlow decouples task state mutations from notification delivery:
-1. The API transaction validates membership, updates the task row, records assignment history, and writes a `pending` notification row in PostgreSQL. Creating a task with an `assignee_id` (`TaskService.create_task`) counts as an assignment and stages the same row. On reassignment or unassignment, the replaced assignee's undelivered `pending` row is set to `cancelled` in the same transaction.
+1. The API transaction validates membership, updates the task row, records assignment history, and writes a `pending` notification row in PostgreSQL. Creating a task with an `assignee_id` (`TaskService.create_task`) or importing one (`TaskImportService.import_raw_task`, single or batch) counts as an assignment and stages the same row; after commit both queue the job and publish the `task.assigned` event. An idempotent import retry returns the existing task and notifies nobody again. On reassignment or unassignment, the replaced assignee's undelivered `pending` row is set to `cancelled` in the same transaction.
 2. The transaction commits to PostgreSQL.
 3. Immediately **after commit**, the API publishes a background job carrying only the row's `notification_id` (`enqueue_assignment_notification`, which calls `apply_async(..., retry=False)`). Kombu publishes synchronously, so the service runs it in a thread via `asyncio.to_thread` and the event loop keeps serving other requests.
-4. The background Celery worker picks up the job from Redis, locks that notification row, delivers it, and transitions it from `pending` to `sent`.
+4. The background Celery worker picks up the job from Redis, locks the task and then that notification row, delivers it, and transitions it from `pending` to `sent`.
 5. If the publish fails (or a job is lost), the row stays `pending`. A Celery Beat sweep re-publishes it (see [§5](#5-system-resilience--outage-scenarios)).
 
 ```
@@ -142,7 +142,7 @@ In distributed systems with `task_acks_late=True` and automatic retries, **at-le
 ### Deduplication Strategy
 The **notification row is the idempotency key**. `assign_task` flushes the `pending` row inside the assignment transaction to get its id, and the job receives only `notification_id`. The task implementation in [`app/tasks/notification_tasks.py`](../../app/tasks/notification_tasks.py):
 
-1. **Lock the row**: `SELECT ... FROM notification WHERE id = :notification_id FOR UPDATE`. A redelivered (`acks_late`) or concurrently running copy of the same job blocks here until the first copy commits.
+1. **Lock the task, then the row**: `SELECT ... FROM task WHERE id = :task_id FOR SHARE`, then `SELECT ... FROM notification WHERE id = :notification_id FOR UPDATE`. A redelivered (`acks_late`) or concurrently running copy of the same job blocks on the row until the first copy commits. The task lock comes first, in the same order `assign_task` takes them (task `FOR UPDATE`, then the notification `UPDATE`), so the two never deadlock.
 2. **Short-Circuit unless pending**: If the row is already `sent` (or `failed`/`cancelled`), the task logs an idempotent skip and returns immediately:
    ```json
    {
@@ -156,7 +156,7 @@ The **notification row is the idempotency key**. `assign_task` flushes the `pend
 3. **Validate and Deliver**: Check the task and recipient exist and the task is still assigned to the recipient, then update the row in place to `status = "sent"`, enriching its payload (`dispatched: true`, `task_title`).
 
 ### Superseded Assignments
-If a task is reassigned (or unassigned) before the previous assignee's job runs, `assign_task` sets that undelivered row to `cancelled` in the same transaction. The late job then returns `skipped` instead of failing with `InvalidAssignmentNotificationError`, so `failed` keeps meaning "delivery broke". Both sides lock the row, so a notification that was already `sent` is never cancelled.
+If a task is reassigned (or unassigned) before the previous assignee's job runs, `assign_task` sets that undelivered row to `cancelled` in the same transaction. The late job then returns `skipped` instead of failing with `InvalidAssignmentNotificationError`, so `failed` keeps meaning "delivery broke". Both sides lock the row, so a notification that was already `sent` is never cancelled. Delivery also waits on the task lock, so a job that starts while a reassignment is still uncommitted waits for it, then sees the row `cancelled` and skips it, instead of notifying the replaced assignee from the last committed state (`tests/integration/services/test_celery_assignment_concurrency.py`).
 
 ### Why not key on `(task_id, recipient_id)`?
 An earlier version looked up all `TASK_ASSIGNED` rows for the task and recipient and skipped delivery if *any* was `sent`. For a task reassigned **A → B → A**, the second assignment to A found A's old `sent` row and returned `already_sent`, leaving the new `pending` row undelivered. Keying on the row id means each assignment gets exactly one delivery. `tests/integration/services/test_celery_assignment_flow.py::test_reassignment_back_to_earlier_assignee_delivers_new_notification` covers this case.
@@ -190,6 +190,7 @@ make celery-demo
 make celery-worker
 make celery-beat   # runs the stale-pending outbox sweep
 ```
+In Docker Compose, `make docker-up` starts both as the `celery-worker` and `celery-beat` services.
 
 ### Inspecting Redis Broker Shell
 ```bash

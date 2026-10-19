@@ -33,5 +33,3 @@ services:
       - ./packages:/app/packages
       - ./alembic:/app/alembic
       - ./alembic.ini:/app/alembic.ini
-
-

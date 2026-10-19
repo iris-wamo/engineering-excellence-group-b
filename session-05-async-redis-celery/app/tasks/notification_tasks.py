@@ -32,19 +32,42 @@ async def _execute_assignment_notification(
     db: AsyncSession,
     notification_id: int,
 ) -> dict[str, Any]:
-    # 1. Lock the outbox row this job was dispatched for. The row id is the idempotency key:
-    #    a redelivered or concurrently running copy of the job waits here, then sees 'sent'.
-    notification = await db.scalar(
-        select(Notification).where(Notification.id == notification_id).with_for_update()
+    # 1. Find which task the outbox row belongs to (no lock yet)
+    task_id = await db.scalar(
+        select(Notification.task_id).where(Notification.id == notification_id)
     )
-    if notification is None:
-        raise NotificationNotFoundError(f"Notification with id {notification_id} not found.")
-    if notification.type != "TASK_ASSIGNED" or notification.task_id is None:
+    if task_id is None:
+        if await db.get(Notification, notification_id) is None:
+            raise NotificationNotFoundError(f"Notification with id {notification_id} not found.")
         raise InvalidAssignmentNotificationError(
             f"Notification {notification_id} is not a task assignment notification."
         )
 
-    task_id = notification.task_id
+    # 2. Lock the task, then the row, in the same order as TaskService.assign_task. A
+    #    reassignment in flight holds the task lock, so delivery waits for it to commit and
+    #    then sees the row it cancelled, instead of notifying the replaced assignee.
+    task = await db.scalar(
+        select(TaskModel)
+        .where(TaskModel.id == task_id)
+        .with_for_update(read=True)
+        .execution_options(populate_existing=True)
+    )
+
+    # 3. Lock the outbox row this job was dispatched for. The row id is the idempotency key:
+    #    a redelivered or concurrently running copy of the job waits here, then sees 'sent'.
+    notification = await db.scalar(
+        select(Notification)
+        .where(Notification.id == notification_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if notification is None:
+        raise NotificationNotFoundError(f"Notification with id {notification_id} not found.")
+    if notification.type != "TASK_ASSIGNED":
+        raise InvalidAssignmentNotificationError(
+            f"Notification {notification_id} is not a task assignment notification."
+        )
+
     recipient_id = notification.recipient_id
     result: dict[str, Any] = {
         "notification_id": notification.id,
@@ -52,7 +75,7 @@ async def _execute_assignment_notification(
         "recipient_id": recipient_id,
     }
 
-    # 2. Idempotency check: only a 'pending' row is ever delivered
+    # 4. Idempotency check: only a 'pending' row is ever delivered
     if notification.status != "pending":
         logger.info(
             "Notification %s is already '%s'. Skipping duplicate delivery (idempotent).",
@@ -62,23 +85,20 @@ async def _execute_assignment_notification(
         status = "already_sent" if notification.status == "sent" else "skipped"
         return {**result, "status": status, "idempotent": True}
 
-    # 3. Validate task existence (permanent error if missing)
-    task = await db.get(TaskModel, task_id)
+    # 5. Validate task and recipient existence (permanent errors if missing)
     if not task:
         raise TaskNotFoundError(f"Task with id {task_id} not found.")
-
-    # 4. Validate recipient existence (permanent error if missing)
     recipient = await db.get(User, recipient_id)
     if not recipient:
         raise RecipientNotFoundError(f"Recipient user with id {recipient_id} not found.")
 
-    # 5. Verify task is still assigned to recipient
+    # 6. Verify task is still assigned to recipient
     if task.assignee_id != recipient_id:
         raise InvalidAssignmentNotificationError(
             f"Task {task_id} is assigned to user {task.assignee_id}, not {recipient_id}."
         )
 
-    # 6. Deliver: transition the row to 'sent'
+    # 7. Deliver: transition the row to 'sent'
     notification.status = "sent"
     payload = dict(notification.payload or {})
     payload.update({"task_title": task.title, "dispatched": True})

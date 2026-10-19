@@ -109,7 +109,7 @@ async def verify_project_membership(db: AsyncSession, user_id: int, project_id: 
 _verify_project_membership = verify_project_membership
 
 
-def _stage_assignment_notification(
+def stage_assignment_notification(
     db: AsyncSession, task: Task, recipient_id: int, assigned_by_id: int | None
 ) -> Notification:
     """Add a 'pending' outbox row for an assignment to the current transaction."""
@@ -164,6 +164,17 @@ async def _dispatch_assignment_notification(notification_id: int, task_id: int) 
         )
 
 
+async def announce_new_task_assignee(
+    task: Task, notification_id: int, actor_id: int | None
+) -> None:
+    """After commit, for a task created with an assignee: queue the staged notification
+    and publish its task.assigned event. Neither step raises."""
+    await _dispatch_assignment_notification(notification_id, task.id)
+    await publish_task_events(
+        [TaskEvent.assignment_changed(task, previous_assignee_id=None, actor_id=actor_id)]
+    )
+
+
 class TaskService:
     @staticmethod
     async def create_task(
@@ -196,7 +207,7 @@ class TaskService:
             try:
                 db.add(task)
                 await db.flush()
-                notification = _stage_assignment_notification(db, task, data.assignee_id, actor_id)
+                notification = stage_assignment_notification(db, task, data.assignee_id, actor_id)
                 await db.flush()
                 notification_id = notification.id
             except Exception:
@@ -205,11 +216,7 @@ class TaskService:
         task = await TaskRepository.create(db, task)
 
         if notification_id is not None:
-            await _dispatch_assignment_notification(notification_id, task.id)
-        if task.assignee_id is not None:
-            await publish_task_events(
-                [TaskEvent.assignment_changed(task, previous_assignee_id=None, actor_id=actor_id)]
-            )
+            await announce_new_task_assignee(task, notification_id, actor_id)
         return TaskResponse.model_validate(task)
 
     @staticmethod
@@ -365,7 +372,7 @@ class TaskService:
             if assignee_changed and previous_assignee_id is not None:
                 await _cancel_pending_assignment_notifications(db, task.id, previous_assignee_id)
             if data.assignee_id is not None and assignee_changed:
-                notification = _stage_assignment_notification(
+                notification = stage_assignment_notification(
                     db, task, data.assignee_id, assigned_by_id
                 )
                 await db.flush()

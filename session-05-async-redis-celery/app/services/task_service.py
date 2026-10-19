@@ -189,12 +189,13 @@ class TaskService:
             await db.rollback()  # release the row lock
             raise
 
+        events = []
+        if task.status != previous_status:
+            events.append(TaskEvent.status_changed(task, previous_status, actor_id=changed_by_id))
+
         task = await TaskRepository.update(db, task)
         # Published only after the commit, so consumers never see a change that rolled back.
-        if task.status != previous_status:
-            await publish_task_events(
-                [TaskEvent.status_changed(task, previous_status, actor_id=changed_by_id)]
-            )
+        await publish_task_events(events)
         return TaskResponse.model_validate(task)
 
     @staticmethod
@@ -301,18 +302,23 @@ class TaskService:
                     "Simulated failure midway through task assignment transaction"
                 )
 
+            events = []
+            if status_changed:
+                events.append(
+                    TaskEvent.status_changed(task, previous_status, actor_id=assigned_by_id)
+                )
+            if assignee_changed:
+                events.append(
+                    TaskEvent.assignment_changed(
+                        task, previous_assignee_id, actor_id=assigned_by_id
+                    )
+                )
+
             await db.commit()
             await db.refresh(task)
         except Exception:
             await db.rollback()
             raise
 
-        events = []
-        if status_changed:
-            events.append(TaskEvent.status_changed(task, previous_status, actor_id=assigned_by_id))
-        if assignee_changed:
-            events.append(
-                TaskEvent.assignment_changed(task, previous_assignee_id, actor_id=assigned_by_id)
-            )
         await publish_task_events(events)
         return TaskResponse.model_validate(task)

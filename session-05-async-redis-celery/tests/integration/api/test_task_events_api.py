@@ -1,12 +1,17 @@
 """Task status changes and assignments made through the API publish task events."""
 
+from typing import Any
+
 import pytest
 from httpx import AsyncClient
 from redis.asyncio import Redis
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.events import publisher as publisher_module
 from app.events.schemas import TaskEventType
 from app.models.enums import ProjectRole, TaskStatus
+from app.models.task import Task
 from tests.fixtures.events import stream_events
 from tests.fixtures.factories import DataFactory
 
@@ -199,3 +204,69 @@ async def test_redis_outage_does_not_fail_the_request(
 
     assert resp.status_code == 200
     assert resp.json()["status"] == "in_progress"
+
+
+def _simulate_concurrent_write_after_commit(
+    monkeypatch: pytest.MonkeyPatch, **concurrent_values: object
+) -> None:
+    """Make the post-commit refresh see another request's committed change.
+
+    Once our commit releases the row lock, a concurrent request can commit before our
+    refresh runs, so the refreshed task no longer holds the values this request wrote.
+    """
+    real_refresh = AsyncSession.refresh
+
+    async def refresh_then_overwrite(
+        self: AsyncSession, instance: object, *args: Any, **kwargs: Any
+    ) -> None:
+        await real_refresh(self, instance, *args, **kwargs)
+        if isinstance(instance, Task):
+            for name, value in concurrent_values.items():
+                set_committed_value(instance, name, value)
+
+    monkeypatch.setattr(AsyncSession, "refresh", refresh_then_overwrite)
+
+
+async def test_status_event_reflects_this_request_despite_concurrent_write(
+    client: AsyncClient,
+    factory: DataFactory,
+    redis_client: Redis,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = await factory.project()
+    assignee = await factory.member(project)
+    task = await factory.task(project, assignee=assignee.id)
+    _simulate_concurrent_write_after_commit(monkeypatch, status=TaskStatus.todo)
+
+    resp = await client.patch(
+        f"/api/v1/tasks/{task.id}/status", json={"status": "in_progress"}, headers=assignee.headers
+    )
+
+    assert resp.status_code == 200
+    [event] = await stream_events(redis_client)
+    assert event.data == {"previous_status": "todo", "new_status": "in_progress"}
+
+
+async def test_assignment_events_reflect_this_request_despite_concurrent_write(
+    client: AsyncClient,
+    factory: DataFactory,
+    redis_client: Redis,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = await factory.project()
+    manager = await factory.member(project, ProjectRole.manager)
+    assignee = await factory.member(project)
+    task = await factory.task(project)
+    _simulate_concurrent_write_after_commit(monkeypatch, status=TaskStatus.todo, assignee_id=None)
+
+    resp = await client.post(
+        f"/api/v1/tasks/{task.id}/assign",
+        json={"assignee_id": assignee.id, "status": "in_progress"},
+        headers=manager.headers,
+    )
+
+    assert resp.status_code == 200
+    status_event, assigned_event = await stream_events(redis_client)
+    assert status_event.data == {"previous_status": "todo", "new_status": "in_progress"}
+    assert assigned_event.event_type is TaskEventType.assigned
+    assert assigned_event.data == {"previous_assignee_id": None, "new_assignee_id": assignee.id}

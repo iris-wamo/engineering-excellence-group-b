@@ -27,3 +27,9 @@ services:
       - ./alembic:/app/alembic
       - ./alembic.ini:/app/alembic.ini
 
+  celery-beat:
+    volumes:
+      - ./app:/app/app
+      - ./packages:/app/packages
+      - ./alembic:/app/alembic
+      - ./alembic.ini:/app/alembic.ini

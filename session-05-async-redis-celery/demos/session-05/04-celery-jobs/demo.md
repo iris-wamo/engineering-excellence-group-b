@@ -241,5 +241,4 @@ tests/integration/services/test_celery_assignment_flow.py::test_create_task_with
 
 ## Open Questions
 
-- In Session 05 #102, Celery Beat gets a dedicated container in Docker Compose. Until then, run `make celery-beat` locally so the stale-pending outbox sweep runs.
 - For dead-letter handling of permanently failed notification tasks: should exhausted retries publish to a dead-letter Redis Stream or remain recorded with `status='failed'` in PostgreSQL? *(Currently audited in PostgreSQL `notification` table with payload error field).*

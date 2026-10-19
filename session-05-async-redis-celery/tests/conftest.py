@@ -1,8 +1,9 @@
 """Suite-wide fixtures.
 
-Database fixtures live in tests/fixtures/database.py and are registered as a plugin
-below. Data factories are in tests/fixtures/factories.py and token helpers in
-tests/fixtures/auth.py. Test modules import helpers and types from tests.fixtures,
+Database fixtures live in tests/fixtures/database.py and Redis fixtures in
+tests/fixtures/redis.py; both are registered as plugins below. Data factories are in
+tests/fixtures/factories.py, token helpers in tests/fixtures/auth.py, and task event
+helpers in tests/fixtures/events.py. Test modules import helpers and types from tests.fixtures,
 never from this file.
 """
 
@@ -27,7 +28,7 @@ from tests.fixtures.auth import (
 )
 from tests.fixtures.factories import DEFAULT_WORKSPACE_ID, DataFactory
 
-pytest_plugins = ["tests.fixtures.database"]
+pytest_plugins = ["tests.fixtures.database", "tests.fixtures.redis"]
 
 # Every test is marked after the top-level folder it lives in (tests/unit, tests/integration,
 # tests/auth), so `pytest -m unit` runs only the tests that need no database. Tests outside

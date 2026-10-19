@@ -222,13 +222,23 @@ make help  # or simply `make`
 
 #### Docker & Containerization
 - `make docker-build` - Build Docker images.
-- `make docker-up` - Start application and database.
+- `make docker-up` - Start the application, Postgres, MongoDB, and Redis.
 - `make docker-down` - Stop application and database.
 - `make docker-logs` - Show application logs.
 - `make docker-shell` - Open shell inside API container.
 - `make docker-db-shell` - Open a psql shell on the Dockerized Postgres.
+- `make redis-cli` - Open a `redis-cli` shell on the Dockerized Redis.
+
+#### Task Events (Redis)
+- `make events-pubsub` - Run the Redis Pub/Sub task event consumer until Ctrl+C.
+- `make events-streams` - Run the Redis Streams task event consumer until Ctrl+C. Add `NAME=worker-1` to keep the same consumer name across restarts.
+- `make events-demo` - Scripted Pub/Sub vs Streams comparison: offline consumer, duplicate events, crash before acknowledgement.
+
+Task status changes and assignments publish events to both transports. See
+[`docs/session-05/redis-pubsub-vs-streams.md`](docs/session-05/redis-pubsub-vs-streams.md).
 
 > **Note on host commands with Docker**: When the stack is running via `make docker-up`, PostgreSQL is mapped to host port **5433** (via `compose.override.yaml`). Ensure `DATABASE_URL` in `.env` uses `localhost:5433` (e.g. `postgresql+asyncpg://taskflow:taskflow@localhost:5433/taskflow`) so that host make commands (`make seed`, `make migrate`, `make test`) connect to the container database.
+Redis is mapped to host port **6379**, matching `REDIS_URL` in `.env.example`; tests use logical database 15 on the same server.
 
 
 
@@ -286,10 +296,11 @@ app/
   services/            Business logic service layer
   repositories/        Database queries and data access layer
   workflows/           Domain workflow and transition engines
+  events/              Task events: payload, Redis publisher, Pub/Sub and Streams consumers
   models/              SQLAlchemy ORM models
   schemas/             Pydantic validation schemas
   core/                App settings and exception handlers
-  db/                  Database engine and session management
+  db/                  Database engine, Mongo, and Redis client management
 packages/
   taskflow_shared/     Reusable shared package (errors, pagination, logging, enums)
 alembic/

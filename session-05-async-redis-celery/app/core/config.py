@@ -12,8 +12,15 @@ class Settings(BaseAppSettings):
     mongo_url: MongoDsn
     mongo_db: str
 
-    # Redis and Celery configuration
+    # Redis: task events are published to a Pub/Sub channel and a Stream side by side
+    # (see docs/session-05/redis-pubsub-vs-streams.md).
     redis_url: RedisDsn = RedisDsn("redis://localhost:6379/0")
+    task_events_channel: str = "taskflow:task-events"
+    task_events_stream: str = "taskflow:task-events:stream"
+    task_events_stream_group: str = "task-event-processors"
+    task_events_stream_maxlen: int = 10_000
+    task_events_dead_letter_stream: str = "taskflow:task-events:dead-letter"
+    # Celery broker and result backend (separate Redis databases from REDIS_URL)
     celery_broker_url: str = "redis://localhost:6379/1"
     celery_result_backend: str = "redis://localhost:6379/2"
     # Outbox sweep: re-publish assignment notifications left 'pending' longer than this

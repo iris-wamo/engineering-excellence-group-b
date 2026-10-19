@@ -10,6 +10,8 @@ from app.core.exceptions import (
     ProjectMembershipRequiredError,
     TransactionSimulationError,
 )
+from app.events.publisher import publish_task_events
+from app.events.schemas import TaskEvent
 from app.models.activity_log import ActivityLog
 from app.models.enums import TaskPriority, TaskStatus
 from app.models.notification import Notification
@@ -204,6 +206,10 @@ class TaskService:
 
         if notification_id is not None:
             await _dispatch_assignment_notification(notification_id, task.id)
+        if task.assignee_id is not None:
+            await publish_task_events(
+                [TaskEvent.assignment_changed(task, previous_assignee_id=None, actor_id=actor_id)]
+            )
         return TaskResponse.model_validate(task)
 
     @staticmethod
@@ -251,6 +257,7 @@ class TaskService:
     ) -> TaskResponse:
         # Lock the row so concurrent status changes are validated one after another.
         task = await _get_task_or_404(db, task_id, workspace_id=workspace_id, for_update=True)
+        previous_status = task.status
 
         try:
             TaskWorkflow.transition_status(db, task, data.status, changed_by_id=changed_by_id)
@@ -258,7 +265,13 @@ class TaskService:
             await db.rollback()  # release the row lock
             raise
 
+        events = []
+        if task.status != previous_status:
+            events.append(TaskEvent.status_changed(task, previous_status, actor_id=changed_by_id))
+
         task = await TaskRepository.update(db, task)
+        # Published only after the commit, so consumers never see a change that rolled back.
+        await publish_task_events(events)
         return TaskResponse.model_validate(task)
 
     @staticmethod
@@ -281,6 +294,8 @@ class TaskService:
            adds a pending one for the new assignee
 
         If any error or simulated failure occurs, the entire transaction rolls back.
+        After the commit, task.status_changed and task.assigned / task.unassigned events
+        are published for whatever actually changed.
         """
         # Lock the row so a concurrent status/assignee change cannot be validated against
         # a stale read.
@@ -362,6 +377,18 @@ class TaskService:
                     "Simulated failure midway through task assignment transaction"
                 )
 
+            events = []
+            if status_changed:
+                events.append(
+                    TaskEvent.status_changed(task, previous_status, actor_id=assigned_by_id)
+                )
+            if assignee_changed:
+                events.append(
+                    TaskEvent.assignment_changed(
+                        task, previous_assignee_id, actor_id=assigned_by_id
+                    )
+                )
+
             await db.commit()
             await db.refresh(task)
         except Exception:
@@ -371,5 +398,5 @@ class TaskService:
         # 6. Queue background notification job after successful commit
         if notification_id is not None:
             await _dispatch_assignment_notification(notification_id, task.id)
-
+        await publish_task_events(events)
         return TaskResponse.model_validate(task)

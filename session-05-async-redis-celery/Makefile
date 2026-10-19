@@ -6,6 +6,7 @@ include makefiles/quality.mk
 include makefiles/testing.mk
 include makefiles/docker.mk
 include makefiles/celery.mk
+include makefiles/events.mk
 
 .PHONY: help
 help: ## List all available targets grouped by section
@@ -27,6 +28,8 @@ help: ## List all available targets grouped by section
 			section="Docker & Containerization"; \
 		elif [ "$$short_name" = "celery" ]; then \
 			section="Celery & Background Tasks"; \
+		elif [ "$$short_name" = "events" ]; then \
+			section="Task Events (Redis)"; \
 		else \
 			section="$$short_name"; \
 		fi; \

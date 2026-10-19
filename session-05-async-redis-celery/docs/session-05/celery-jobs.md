@@ -22,8 +22,9 @@ When notifications are delivered synchronously within an API endpoint:
 TaskFlow decouples task state mutations from notification delivery:
 1. The API transaction validates membership, updates the task row, records assignment history, and writes a `pending` notification row in PostgreSQL.
 2. The transaction commits to PostgreSQL.
-3. Immediately **after commit**, the API enqueues a background task via Celery (`send_task_assignment_notification.delay(...)`) and responds to the client immediately (< 5ms dispatch).
-4. The background Celery worker picks up the job from Redis, delivers the notification, and transitions the row from `pending` to `sent`.
+3. Immediately **after commit**, the API publishes a background job carrying only the row's `notification_id` (`enqueue_assignment_notification`, which calls `apply_async(..., retry=False)`). Kombu publishes synchronously, so the service runs it in a thread via `asyncio.to_thread` and the event loop keeps serving other requests.
+4. The background Celery worker picks up the job from Redis, locks that notification row, delivers it, and transitions it from `pending` to `sent`.
+5. If the publish fails (or a job is lost), the row stays `pending`. A Celery Beat sweep re-publishes it (see [§5](#5-system-resilience--outage-scenarios)).
 
 ```
  Client             API (FastAPI)              Postgres               Redis Broker           Celery Worker
@@ -36,10 +37,11 @@ TaskFlow decouples task state mutations from notification delivery:
    │                      │   (status='pending')  │                        │                       │
    │                      │── COMMIT ────────────►│                        │                       │
    │                      │                       │                        │                       │
-   │                      │── .delay(task, user) ─────────────────────────►│                       │
+   │                      │── apply_async(notification_id) (thread) ──────►│                       │
    │◄── 200 OK ───────────│                                                │                       │
-   │   (sub-millisecond)  │                                                │── BRPOP (claim job) ─►│
+   │                      │                                                │── BRPOP (claim job) ─►│
    │                      │                                                │                       │── Deliver Notification
+   │                      │                                                │                       │   SELECT ... FOR UPDATE
    │                      │                                                │                       │   UPDATE Notification
    │                      │                                                │                       │   SET status='sent'
    │                      │                                                │                       │── ACK job ───────────►
@@ -63,6 +65,7 @@ To ensure zero message loss and deterministic task execution:
 - **`worker_prefetch_multiplier = 1`**: Disables aggressive task prefetching. Each worker process takes only one message at a time, ensuring fair distribution and preventing one worker from hoarding tasks during slow execution or retries.
 - **`task_serializer = "json"`**: Restricts serialization strictly to JSON, avoiding Python pickle security vulnerabilities.
 - **`task_time_limit = 1800` (30 min)** & **`task_soft_time_limit = 1500` (25 min)**: Prevents hanging jobs from locking worker slots indefinitely.
+- **`broker_connection_timeout = 1`** & **`broker_transport_options = {"socket_connect_timeout": 1, "socket_timeout": 1}`**: Publishing to a slow or unreachable Redis fails after ~1s instead of the 4s Celery default (and redis-py's unbounded socket connect). Measured locally against an unroutable broker address: 4.07s before, 1.05s after.
 
 ### Worker Database Session Isolation (`app/tasks/db.py`)
 Celery workers operate asynchronously with their own event loops across worker processes. Sharing connection pools across forks or threads causes `InterfaceError` and event loop collisions.
@@ -101,9 +104,11 @@ Not all errors should be retried. Blindly retrying validation errors or non-exis
 
 ### Transient Failures (Retryable)
 Transient errors represent temporary infrastructure blips that are expected to self-heal:
-- Database connectivity loss (`OperationalError`, `DBAPIError`).
-- Socket and network timeouts (`ConnectionError`, `TimeoutError`, `OSError`).
+- Database connectivity loss (`OperationalError`, `InterfaceError`, or any `DBAPIError` with `connection_invalidated=True`).
+- Socket and network failures (`OSError`, which covers `ConnectionError` and `TimeoutError`).
 - Explicit transient failures (`NotificationTransientError`).
+
+Other `DBAPIError` subclasses (`IntegrityError`, `ProgrammingError`, `DataError`) fail the same way on every attempt, so they are **not** retried.
 
 **Retry Policy:**
 - **Max Retries**: 3 attempts (`max_retries=3`).
@@ -115,6 +120,7 @@ Transient errors represent temporary infrastructure blips that are expected to s
 
 ### Permanent Failures (Non-Retryable)
 Permanent errors represent deterministic, invariant domain failures:
+- Notification row the job was dispatched for does not exist (`NotificationNotFoundError`).
 - Target task does not exist (`TaskNotFoundError`).
 - Target recipient user does not exist (`RecipientNotFoundError`).
 - Task assignee does not match notification recipient (`InvalidAssignmentNotificationError`).
@@ -122,7 +128,10 @@ Permanent errors represent deterministic, invariant domain failures:
 
 **Failure Policy:**
 - **Retries**: 0 (aborted immediately, `self.retry()` is never called).
-- **Audit**: The task immediately updates any pending notification row to `status = 'failed'`, records the exact error in the JSON payload, logs an `ERROR` level message, and terminates.
+- **Audit**: The task immediately updates its own notification row (only if still `pending`) to `status = 'failed'`, records the exact error in the JSON payload, logs an `ERROR` level message, and terminates.
+
+### Unexpected Errors
+Any other exception (a `KeyError`, `ValueError`, or a bug) is neither retried nor left silent: the task logs it with a traceback, marks the row `failed` with `"<ExceptionType>: <message>"` in the payload, and re-raises so it shows as a failure in Flower.
 
 ---
 
@@ -131,10 +140,10 @@ Permanent errors represent deterministic, invariant domain failures:
 In distributed systems with `task_acks_late=True` and automatic retries, **at-least-once delivery** means a task may execute more than once (e.g. worker network cuts out after completing work but before the ACK reaches Redis).
 
 ### Deduplication Strategy
-The task implementation in [`app/tasks/notification_tasks.py`](../../app/tasks/notification_tasks.py) enforces idempotency at the database layer:
+The **notification row is the idempotency key**. `assign_task` flushes the `pending` row inside the assignment transaction to get its id, and the job receives only `notification_id`. The task implementation in [`app/tasks/notification_tasks.py`](../../app/tasks/notification_tasks.py):
 
-1. **Query Existing Notifications**: Before taking action, query the `notification` table for matching `(task_id, recipient_id, type="TASK_ASSIGNED")`.
-2. **Short-Circuit on Delivered**: If an existing notification has `status == "sent"`, the task logs an idempotent skip and returns immediately:
+1. **Lock the row**: `SELECT ... FROM notification WHERE id = :notification_id FOR UPDATE`. A redelivered (`acks_late`) or concurrently running copy of the same job blocks here until the first copy commits.
+2. **Short-Circuit unless pending**: If the row is already `sent` (or `failed`/`cancelled`), the task logs an idempotent skip and returns immediately:
    ```json
    {
      "status": "already_sent",
@@ -144,9 +153,10 @@ The task implementation in [`app/tasks/notification_tasks.py`](../../app/tasks/n
      "idempotent": true
    }
    ```
-   No duplicate database rows are created, and no duplicate notifications are sent to the user.
-3. **Transition Pending to Sent**: If a notification exists with `status == "pending"`, it is updated in-place to `status = "sent"`, enriching its payload with delivery metadata (`dispatched: true`, `task_title`, `timestamp`).
-4. **Fallback Creation**: If no notification record existed, a new row is created with `status = "sent"`.
+3. **Validate and Deliver**: Check the task and recipient exist and the task is still assigned to the recipient, then update the row in place to `status = "sent"`, enriching its payload (`dispatched: true`, `task_title`).
+
+### Why not key on `(task_id, recipient_id)`?
+An earlier version looked up all `TASK_ASSIGNED` rows for the task and recipient and skipped delivery if *any* was `sent`. For a task reassigned **A → B → A**, the second assignment to A found A's old `sent` row and returned `already_sent`, leaving the new `pending` row undelivered. Keying on the row id means each assignment gets exactly one delivery. `tests/integration/services/test_celery_assignment_flow.py::test_reassignment_back_to_earlier_assignee_delivers_new_notification` covers this case.
 
 ---
 
@@ -156,7 +166,8 @@ The task implementation in [`app/tasks/notification_tasks.py`](../../app/tasks/n
 | :--- | :--- |
 | **Celery Worker is Down** | The API successfully commits the task assignment to PostgreSQL and pushes the job into Redis queue `celery`. The job sits safely in Redis memory. When a worker process starts, it immediately pops and processes all queued notifications without data loss. |
 | **Worker Crashes Mid-Task** | Because `task_acks_late=True` and `task_reject_on_worker_lost=True`, Redis holds the message until acknowledged. A surviving or restarted worker reclaims the message. Thanks to idempotency, partial work is reconciled without duplicates. |
-| **Redis Broker is Down** | The database transaction for task assignment has already committed. The API's `.delay()` call catches the broker connection error, logs a warning, and returns HTTP 200 to the user. The assignment succeeds. The notification remains in `pending` status in PostgreSQL, serving as an outbox record that can be re-dispatched. |
+| **Redis Broker is Down** | The database transaction for task assignment has already committed. The publish runs in a thread with `retry=False` and 1s broker timeouts, so the request is delayed by about a second at most and the event loop is never blocked. The error is logged as a warning and the API returns HTTP 200. The notification stays `pending` in PostgreSQL until the outbox sweep re-publishes it. |
+| **Job Lost (publish failed, or message dropped)** | `requeue_stale_assignment_notifications` runs on Celery Beat every `notification_requeue_interval_seconds` (default 300s). It selects up to `notification_requeue_batch_size` (default 100) `TASK_ASSIGNED` rows still `pending` after `notification_requeue_after_minutes` (default 5) and re-publishes each one by `notification_id`. Re-publishing a row whose job is still in flight is safe because delivery locks the row and skips anything not `pending`. Rows marked `failed` are not re-sent automatically. |
 | **Database Outage During Worker Run** | The worker raises `OperationalError`, which is caught as a transient failure. Celery retries with exponential backoff up to 3 times while waiting for the database connection to recover. |
 
 ---
@@ -164,16 +175,17 @@ The task implementation in [`app/tasks/notification_tasks.py`](../../app/tasks/n
 ## 6. Verification & Commands
 
 ### Running the End-to-End Demo
-To verify all 6 scenarios (latency, delivery, idempotency, retry backoff, permanent failure, worker-down buffering):
+To verify all 7 scenarios (dispatch, delivery, idempotency, retry backoff, permanent failure, worker-down buffering, A → B → A reassignment):
 
 ```bash
 make celery-demo
 ```
 *(Or directly: `uv run python -m scripts.demo_celery_jobs`)*
 
-### Starting the Worker Locally
+### Starting the Worker and Beat Locally
 ```bash
 make celery-worker
+make celery-beat   # runs the stale-pending outbox sweep
 ```
 
 ### Inspecting Redis Broker Shell
@@ -186,9 +198,10 @@ LRANGE celery 0 -1
 
 ### Running Test Suites
 ```bash
-# Unit tests (exception hierarchy, backoff calculation, retry limits)
+# Unit tests (exception hierarchy, backoff calculation, retry limits, retry classification)
 uv run pytest tests/unit/test_celery_notification_tasks.py
 
-# Integration tests (transaction commit, broker offline resilience, DB delivery, idempotency)
+# Integration tests (transaction commit, broker offline resilience, DB delivery, idempotency,
+# A -> B -> A reassignment, outbox sweep selection)
 uv run pytest tests/integration/services/test_celery_assignment_flow.py
 ```

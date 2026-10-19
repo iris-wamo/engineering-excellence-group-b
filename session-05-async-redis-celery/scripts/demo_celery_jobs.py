@@ -10,6 +10,7 @@ Demonstrates end-to-end:
   4. Transient failure retry: exponential backoff retry and recovery
   5. Permanent failure termination: immediate failure without retry, marking notification failed
   6. Worker-down queue resilience: jobs buffered safely in Redis list while worker is offline
+  7. Reassignment A -> B -> A: the second notification to A is delivered, not skipped
 """
 
 import asyncio
@@ -33,10 +34,11 @@ from app.schemas.task import TaskAssignRequest
 from app.services.task_service import TaskService
 from app.tasks.db import get_worker_db
 from app.tasks.exceptions import (
-    TaskNotFoundError,
+    NotificationNotFoundError,
 )
 from app.tasks.notification_tasks import (
     _process_assignment_notification,
+    enqueue_assignment_notification,
     send_task_assignment_notification,
 )
 
@@ -189,7 +191,7 @@ async def run_demo() -> None:
     duration_ms = (time.perf_counter() - start_time) * 1000
     print(f"  • Task assigned to user {updated.assignee_id}")
     print(f"  • Request-path execution time: {BOLD}{duration_ms:.2f} ms{RESET}")
-    print("  • Background job queued to Celery broker via send_task_assignment_notification.delay")
+    print("  • Background job queued off the event loop via enqueue_assignment_notification")
 
     # Verify pending notification created in DB
     async with get_worker_db() as db:
@@ -200,17 +202,14 @@ async def run_demo() -> None:
             )
         )
         assert notif is not None
+        notification_id = notif.id
         print(f"  • Notification row in DB: ID={notif.id}, Status={YELLOW}{notif.status}{RESET}\n")
 
     # -------------------------------------------------------------------------
     # Scenario 2: Worker picks up and completes the notification job
     # -------------------------------------------------------------------------
     subheader("Step 2: Celery Worker Processes Notification Job")
-    result = await _process_assignment_notification(
-        task_id=task.id,
-        recipient_id=assignee.id,
-        assigned_by_id=assigner.id,
-    )
+    result = await _process_assignment_notification(notification_id)
     print(f"  • Worker execution result: {result}")
 
     async with get_worker_db() as db:
@@ -225,11 +224,7 @@ async def run_demo() -> None:
     # Scenario 3: Task Idempotency (Running job twice has no duplicate effect)
     # -------------------------------------------------------------------------
     subheader("Step 3: Idempotent Delivery Check (Duplicate Execution)")
-    duplicate_result = await _process_assignment_notification(
-        task_id=task.id,
-        recipient_id=assignee.id,
-        assigned_by_id=assigner.id,
-    )
+    duplicate_result = await _process_assignment_notification(notification_id)
     print(f"  • Second execution result: {duplicate_result}")
     assert duplicate_result["idempotent"] is True
     assert duplicate_result["status"] == "already_sent"
@@ -261,8 +256,7 @@ async def run_demo() -> None:
     try:
         send_task_assignment_notification.apply(
             kwargs={
-                "task_id": task.id,
-                "recipient_id": assignee.id,
+                "notification_id": notification_id,
                 "simulate_transient_failures": 1,
             },
             throw=True,
@@ -276,13 +270,13 @@ async def run_demo() -> None:
     # Scenario 5: Permanent failure (Entity not found or invalid data)
     # -------------------------------------------------------------------------
     subheader("Step 5: Permanent Failure (No Retries, Mark Failed)")
-    print("  Testing permanent failure on invalid task ID 999999...")
+    print("  Testing permanent failure on invalid notification ID 999999...")
     try:
         send_task_assignment_notification.apply(
-            kwargs={"task_id": 999_999, "recipient_id": assignee.id},
+            kwargs={"notification_id": 999_999},
             throw=True,
         )
-    except TaskNotFoundError as exc:
+    except NotificationNotFoundError as exc:
         print(f"  • Caught non-retryable error: {type(exc).__name__}: {exc}")
         print("  • Celery aborted immediately without scheduling retry.")
         print(f"  [{GREEN}PASS{RESET}] Permanent errors never retry.\n")
@@ -296,13 +290,9 @@ async def run_demo() -> None:
     print(f"  • Broker queue '{queue_name}' initial length: {initial_queue_len}")
 
     # Enqueue a task directly to broker as if worker is stopped
-    async_res = send_task_assignment_notification.delay(
-        task_id=task.id,
-        recipient_id=assignee.id,
-        assigned_by_id=assigner.id,
-    )
+    enqueue_assignment_notification(notification_id)
     new_queue_len = r.llen(queue_name)
-    print(f"  • Enqueued task {async_res.id} into Redis broker")
+    print(f"  • Enqueued delivery job for notification {notification_id} into Redis broker")
     print(f"  • Broker queue '{queue_name}' length now: {BOLD}{new_queue_len}{RESET}")
     assert new_queue_len == initial_queue_len + 1
     print(f"  [{GREEN}PASS{RESET}] Job is safely preserved in Redis queue while worker is offline.")
@@ -310,6 +300,48 @@ async def run_demo() -> None:
     # Clean up the test message from the queue
     r.rpop(queue_name)
     print(f"  • Drained test message from queue. Remaining: {r.llen(queue_name)}\n")
+
+    # -------------------------------------------------------------------------
+    # Scenario 7: Reassignment back to an earlier assignee (A -> B -> A)
+    # -------------------------------------------------------------------------
+    subheader("Step 7: Reassignment A -> B -> A Delivers the New Notification")
+    other: User = ctx["assignee_2"]
+    for target in (other, assignee):
+        async with get_worker_db() as db:
+            await TaskService.assign_task(
+                db,
+                task_id=task.id,
+                data=TaskAssignRequest(assignee_id=target.id),
+                actor_id=assigner.id,
+            )
+        async with get_worker_db() as db:
+            pending_id = await db.scalar(
+                select(Notification.id).where(
+                    Notification.task_id == task.id,
+                    Notification.recipient_id == target.id,
+                    Notification.status == "pending",
+                )
+            )
+        assert pending_id is not None
+        res = await _process_assignment_notification(pending_id)
+        print(f"  • Assigned to user {target.id}: {res}")
+        assert res["status"] == "sent"
+
+    # Drop the two jobs assign_task published; this step delivered the rows inline
+    r.rpop(queue_name)
+    r.rpop(queue_name)
+
+    async with get_worker_db() as db:
+        rows = (
+            await db.execute(
+                select(Notification.id, Notification.status)
+                .where(Notification.task_id == task.id, Notification.recipient_id == assignee.id)
+                .order_by(Notification.id)
+            )
+        ).all()
+    print(f"  • Rows for (task={task.id}, recipient={assignee.id}): {[tuple(row) for row in rows]}")
+    assert [status for _, status in rows] == ["sent", "sent"]
+    print(f"  [{GREEN}PASS{RESET}] Each assignment row is delivered exactly once.\n")
 
     header("All Celery Background Job Behaviors Verified Successfully!")
 

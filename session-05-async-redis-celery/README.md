@@ -197,15 +197,21 @@ make help  # or simply `make`
 - `make run` - Starts the FastAPI development server with reload.
 
 #### Database & Migrations
-- `make db-shell` - Opens an interactive `psql` database shell on the local Postgres.
+- `make db-shell` - Opens an interactive `psql` shell on the database in `DATABASE_URL` (`.env`).
 - `make migrate` - Runs database migrations (upgrades to head).
 - `make migrate-create m="message"` - Generates a new database migration revision.
-- `make migrate-check` - Verifies database migrations match the current models.
+- `make migrate-check` - Fails if the models and the migrations differ (`alembic check`).
 - `make migrate-current` - Shows current database migration revision.
 - `make migrate-history` - Lists all database migration history.
-- `make seed` - Seeds the database with default local demo data.
-- `make seed-large` - Seeds the database with 10,000 tasks for query performance benchmarking.
-- `make db-reset` - Resets database tables and re-seeds cleanly.
+
+#### Data Seeding
+All seed targets except `seed-clean` truncate every table before loading data.
+- `make seed` - Truncates all tables and loads the default demo dataset (~200 tasks).
+- `make seed-large` - Truncates all tables and loads 10,000 tasks for query performance benchmarking.
+- `make seed-huge` - Truncates all tables and loads 50,000 tasks for heavy stress testing.
+- `make seed-clean` - Truncates all tables and leaves an empty schema (0 rows).
+- `make seed-reset` / `make db-reset` - Aliases for `make seed`.
+- `make db-clean` - Alias for `make seed-clean`.
 
 
 #### Code Quality & Linting
@@ -217,16 +223,19 @@ make help  # or simply `make`
 - `make hooks-run` - Runs all pre-commit hooks against every file.
 
 #### Testing & Coverage
-- `make test` - Runs all unit tests.
-- `make test-cov` - Runs unit tests with code coverage report.
+- `make test` - Runs the full test suite (unit, integration, auth).
+- `make test-unit` - Runs unit tests only; no database needed.
+- `make test-integration` - Runs integration tests; needs PostgreSQL, MongoDB and Redis.
+- `make test-auth` - Runs auth tests; needs PostgreSQL and MongoDB.
+- `make test-cov` - Runs the full test suite with a coverage report.
 
 #### Docker & Containerization
-- `make docker-build` - Build Docker images.
-- `make docker-up` - Start the application, Postgres, MongoDB, and Redis.
-- `make docker-down` - Stop application and database.
-- `make docker-logs` - Show application logs.
+- `make docker-build` - Builds the Docker images for every Compose service with a `build` section.
+- `make docker-up` - Starts every Compose service in the background.
+- `make docker-down` - Stops and removes every Compose container; named volumes (database data) are kept.
+- `make docker-logs` - Follows the `api` logs. Add `s=<service>` for another service, e.g. `make docker-logs s=redis`.
 - `make docker-shell` - Open shell inside API container.
-- `make docker-db-shell` - Open a psql shell on the Dockerized Postgres.
+- `make docker-db-shell` - Opens a `psql` shell inside the Postgres container, as its `POSTGRES_USER` on `POSTGRES_DB`; no host `psql` needed.
 - `make redis-cli` - Open a `redis-cli` shell on the Dockerized Redis.
 
 #### Task Events (Redis)
@@ -377,6 +386,8 @@ The project includes a dedicated, high-performance database seeding script (`scr
 ### Quick Commands
 
 ```bash
+# Every command below except db-clean truncates all tables first.
+
 # 1. Seed database with default local demo data (~200 tasks)
 make seed
 
@@ -389,7 +400,7 @@ make seed-huge
 # 4. Wipe / truncate all database tables leaving an empty schema (0 rows)
 make db-clean
 
-# 5. Perform a clean table truncation and re-seed
+# 5. Same as make seed (alias)
 make db-reset
 ```
 

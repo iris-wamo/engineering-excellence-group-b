@@ -1,13 +1,13 @@
 .PHONY: db-shell
-db-shell: ## Open DB shell
-	psql "postgresql://taskflow:taskflow@localhost:5432/taskflow"
+db-shell: ## Open a psql shell on the database in DATABASE_URL (.env)
+	psql "$$(uv run python -c 'from app.core.config import settings; print(str(settings.database_url).replace("+asyncpg", ""))')"
 
 .PHONY: migrate
 migrate: ## Run migrations
 	uv run alembic upgrade head
 
 .PHONY: migrate-check
-migrate-check: ## Check migrations status
+migrate-check: ## Fail if the models and the migrations differ (alembic check)
 	uv run alembic check
 
 .PHONY: migrate-create

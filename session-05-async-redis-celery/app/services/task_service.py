@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from sqlalchemy import func, select
@@ -267,7 +268,9 @@ class TaskService:
             )
             db.add(activity_log)
 
-            # 4. Notification record (pending outbox for new assignee)
+            # 4. Notification record (pending outbox for new assignee). Flushed so its id
+            #    can be handed to the worker as the idempotency key.
+            notification_id: int | None = None
             if data.assignee_id is not None and assignee_changed:
                 notification = Notification(
                     recipient_id=data.assignee_id,
@@ -281,6 +284,8 @@ class TaskService:
                     },
                 )
                 db.add(notification)
+                await db.flush()
+                notification_id = notification.id
 
             # 5. Mid-transaction failure simulation (staged AFTER all writes)
             if data.simulate_failure:
@@ -294,23 +299,20 @@ class TaskService:
             await db.rollback()
             raise
 
-        # 6. Queue background notification job after successful commit
-        if data.assignee_id is not None and assignee_changed:
+        # 6. Queue background notification job after successful commit. The publish is
+        #    blocking, so it runs off the event loop.
+        if notification_id is not None:
             try:
-                from app.tasks.notification_tasks import send_task_assignment_notification
+                from app.tasks.notification_tasks import enqueue_assignment_notification
 
-                send_task_assignment_notification.delay(
-                    task_id=task.id,
-                    recipient_id=data.assignee_id,
-                    assigned_by_id=assigned_by_id,
-                )
+                await asyncio.to_thread(enqueue_assignment_notification, notification_id)
             except Exception as exc:
-                # The notification record remains safely in 'pending' status in PostgreSQL
-                # (transactional outbox) so delivery can be retried or reconciled by sweeps.
+                # The row stays 'pending' in PostgreSQL (transactional outbox); the
+                # requeue_stale_assignment_notifications Beat sweep re-publishes it.
                 logger.warning(
-                    "Failed to queue assignment notification task for task %s to recipient %s: %s",
+                    "Failed to queue assignment notification %s for task %s: %s",
+                    notification_id,
                     task.id,
-                    data.assignee_id,
                     exc,
                 )
 

@@ -44,6 +44,10 @@ The schedule is registered directly inside the Celery application configuration:
 celery_app.conf.update(
     ...,
     beat_schedule={
+        "requeue-stale-assignment-notifications": {
+            "task": "app.tasks.notification_tasks.requeue_stale_assignment_notifications",
+            "schedule": settings.notification_requeue_interval_seconds,  # default: 300.0s
+        },
         "send-due-task-reminders-periodic": {
             "task": "app.tasks.reminder_tasks.send_due_task_reminders",
             "schedule": settings.celery_beat_schedule_interval_seconds,  # default: 60.0s
@@ -51,6 +55,8 @@ celery_app.conf.update(
     },
 )
 ```
+
+The same Beat process also runs the assignment-notification outbox sweep from #101, which re-publishes `TASK_ASSIGNED` rows left `pending` (see [`celery-jobs.md`](celery-jobs.md) §5).
 
 In development and testing, `celery_beat_schedule_interval_seconds` is set to 60 seconds (or overridden via environment variables). In production, this can be customized to a crontab expression (e.g. every morning at 09:00 UTC).
 

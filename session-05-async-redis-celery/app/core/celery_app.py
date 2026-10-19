@@ -27,7 +27,15 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     task_acks_late=True,
     task_reject_on_worker_lost=True,
+    # Fail fast when Redis is slow or unreachable instead of blocking the publisher
+    # (redis-py's default socket_connect_timeout is None).
+    broker_connection_timeout=1,
+    broker_transport_options={"socket_connect_timeout": 1, "socket_timeout": 1},
     beat_schedule={
+        "requeue-stale-assignment-notifications": {
+            "task": "app.tasks.notification_tasks.requeue_stale_assignment_notifications",
+            "schedule": settings.notification_requeue_interval_seconds,
+        },
         "send-due-task-reminders-periodic": {
             "task": "app.tasks.reminder_tasks.send_due_task_reminders",
             "schedule": settings.celery_beat_schedule_interval_seconds,

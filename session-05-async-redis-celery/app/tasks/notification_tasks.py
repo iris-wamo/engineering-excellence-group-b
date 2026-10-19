@@ -1,20 +1,23 @@
 """Celery background tasks for task assignment notifications."""
 
 import logging
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from celery import Task
 from sqlalchemy import select
-from sqlalchemy.exc import DBAPIError, OperationalError
+from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.celery_app import celery_app
+from app.core.config import settings
 from app.models.notification import Notification
 from app.models.task import Task as TaskModel
 from app.models.user import User
 from app.tasks.db import get_worker_db, run_async
 from app.tasks.exceptions import (
     InvalidAssignmentNotificationError,
+    NotificationNotFoundError,
     NotificationPermanentError,
     NotificationTransientError,
     RecipientNotFoundError,
@@ -26,122 +29,71 @@ logger = logging.getLogger(__name__)
 
 async def _execute_assignment_notification(
     db: AsyncSession,
-    task_id: int,
-    recipient_id: int,
-    assigned_by_id: int | None = None,
+    notification_id: int,
 ) -> dict[str, Any]:
-    # 1. Validate task existence (permanent error if missing)
+    # 1. Lock the outbox row this job was dispatched for. The row id is the idempotency key:
+    #    a redelivered or concurrently running copy of the job waits here, then sees 'sent'.
+    notification = await db.scalar(
+        select(Notification).where(Notification.id == notification_id).with_for_update()
+    )
+    if notification is None:
+        raise NotificationNotFoundError(f"Notification with id {notification_id} not found.")
+    if notification.type != "TASK_ASSIGNED" or notification.task_id is None:
+        raise InvalidAssignmentNotificationError(
+            f"Notification {notification_id} is not a task assignment notification."
+        )
+
+    task_id = notification.task_id
+    recipient_id = notification.recipient_id
+    result: dict[str, Any] = {
+        "notification_id": notification.id,
+        "task_id": task_id,
+        "recipient_id": recipient_id,
+    }
+
+    # 2. Idempotency check: only a 'pending' row is ever delivered
+    if notification.status != "pending":
+        logger.info(
+            "Notification %s is already '%s'. Skipping duplicate delivery (idempotent).",
+            notification.id,
+            notification.status,
+        )
+        status = "already_sent" if notification.status == "sent" else "skipped"
+        return {**result, "status": status, "idempotent": True}
+
+    # 3. Validate task existence (permanent error if missing)
     task = await db.get(TaskModel, task_id)
     if not task:
         raise TaskNotFoundError(f"Task with id {task_id} not found.")
 
-    # 2. Validate recipient existence (permanent error if missing)
+    # 4. Validate recipient existence (permanent error if missing)
     recipient = await db.get(User, recipient_id)
     if not recipient:
         raise RecipientNotFoundError(f"Recipient user with id {recipient_id} not found.")
 
-    # 3. Verify task is actually assigned to recipient
+    # 5. Verify task is still assigned to recipient
     if task.assignee_id != recipient_id:
         raise InvalidAssignmentNotificationError(
             f"Task {task_id} is assigned to user {task.assignee_id}, not {recipient_id}."
         )
 
-    # 4. Check for existing notification (Idempotency check)
-    existing_notifications = (
-        await db.scalars(
-            select(Notification)
-            .where(
-                Notification.task_id == task_id,
-                Notification.recipient_id == recipient_id,
-                Notification.type == "TASK_ASSIGNED",
-            )
-            .order_by(Notification.id.desc())
-        )
-    ).all()
-
-    # If a notification has already been delivered, return without creating duplicate
-    for notif in existing_notifications:
-        if notif.status == "sent":
-            logger.info(
-                "Notification %s already marked 'sent' for task %s to recipient %s. "
-                "Skipping duplicate delivery (idempotent).",
-                notif.id,
-                task_id,
-                recipient_id,
-            )
-            return {
-                "status": "already_sent",
-                "notification_id": notif.id,
-                "task_id": task_id,
-                "recipient_id": recipient_id,
-                "idempotent": True,
-            }
-
-    # If an existing pending notification exists, transition it to 'sent'
-    pending_notification = next((n for n in existing_notifications if n.status == "pending"), None)
-
-    if pending_notification:
-        pending_notification.status = "sent"
-        payload = dict(pending_notification.payload or {})
-        payload.update(
-            {
-                "task_title": task.title,
-                "assigned_by_id": assigned_by_id,
-                "dispatched": True,
-            }
-        )
-        pending_notification.payload = payload
-        await db.commit()
-        await db.refresh(pending_notification)
-        logger.info(
-            "Transitioned pending notification %s to 'sent' for task %s to recipient %s.",
-            pending_notification.id,
-            task_id,
-            recipient_id,
-        )
-        return {
-            "status": "sent",
-            "notification_id": pending_notification.id,
-            "task_id": task_id,
-            "recipient_id": recipient_id,
-            "idempotent": False,
-        }
-
-    # If no notification record exists, create one with 'sent' status
-    new_notification = Notification(
-        recipient_id=recipient_id,
-        task_id=task_id,
-        type="TASK_ASSIGNED",
-        status="sent",
-        payload={
-            "task_id": task_id,
-            "task_title": task.title,
-            "assigned_by_id": assigned_by_id,
-            "dispatched": True,
-        },
-    )
-    db.add(new_notification)
+    # 6. Deliver: transition the row to 'sent'
+    notification.status = "sent"
+    payload = dict(notification.payload or {})
+    payload.update({"task_title": task.title, "dispatched": True})
+    notification.payload = payload
     await db.commit()
-    await db.refresh(new_notification)
     logger.info(
-        "Created sent notification %s for task %s to recipient %s.",
-        new_notification.id,
+        "Transitioned pending notification %s to 'sent' for task %s to recipient %s.",
+        notification.id,
         task_id,
         recipient_id,
     )
-    return {
-        "status": "sent",
-        "notification_id": new_notification.id,
-        "task_id": task_id,
-        "recipient_id": recipient_id,
-        "idempotent": False,
-    }
+    return {**result, "status": "sent", "idempotent": False}
 
 
 async def _process_assignment_notification(
-    task_id: int,
-    recipient_id: int,
-    assigned_by_id: int | None = None,
+    notification_id: int,
     simulate_transient_failures: int = 0,
     simulate_permanent_failure: bool = False,
     current_retry: int = 0,
@@ -164,73 +116,60 @@ async def _process_assignment_notification(
         raise NotificationTransientError(msg)
 
     if db is not None:
-        return await _execute_assignment_notification(
-            db,
-            task_id=task_id,
-            recipient_id=recipient_id,
-            assigned_by_id=assigned_by_id,
-        )
+        return await _execute_assignment_notification(db, notification_id)
 
     async with get_worker_db() as worker_db:
-        return await _execute_assignment_notification(
-            worker_db,
-            task_id=task_id,
-            recipient_id=recipient_id,
-            assigned_by_id=assigned_by_id,
-        )
+        return await _execute_assignment_notification(worker_db, notification_id)
 
 
 async def _execute_mark_failed(
     db: AsyncSession,
-    task_id: int,
-    recipient_id: int,
+    notification_id: int,
     error_message: str,
 ) -> None:
-    notifications = (
-        await db.scalars(
-            select(Notification)
-            .where(
-                Notification.task_id == task_id,
-                Notification.recipient_id == recipient_id,
-                Notification.type == "TASK_ASSIGNED",
-                Notification.status == "pending",
-            )
-            .order_by(Notification.id.desc())
-        )
-    ).all()
+    notification = await db.scalar(
+        select(Notification).where(Notification.id == notification_id).with_for_update()
+    )
+    # Never overwrite a row another delivery already completed
+    if notification is None or notification.status != "pending":
+        return
 
-    for notif in notifications:
-        notif.status = "failed"
-        payload = dict(notif.payload or {})
-        payload["error"] = error_message
-        notif.payload = payload
-
-    if notifications:
-        await db.commit()
-        logger.info(
-            "Marked %s pending notifications as failed for task %s.",
-            len(notifications),
-            task_id,
-        )
+    notification.status = "failed"
+    payload = dict(notification.payload or {})
+    payload["error"] = error_message
+    notification.payload = payload
+    await db.commit()
+    logger.info("Marked notification %s as failed.", notification_id)
 
 
 async def _mark_notification_failed(
-    task_id: int,
-    recipient_id: int,
+    notification_id: int,
     error_message: str,
     db: AsyncSession | None = None,
 ) -> None:
-    """Mark any pending notification as 'failed' in the database."""
+    """Mark the job's notification row as 'failed' in the database, if still pending."""
     try:
         if db is not None:
-            await _execute_mark_failed(db, task_id, recipient_id, error_message)
+            await _execute_mark_failed(db, notification_id, error_message)
         else:
             async with get_worker_db() as worker_db:
-                await _execute_mark_failed(worker_db, task_id, recipient_id, error_message)
+                await _execute_mark_failed(worker_db, notification_id, error_message)
     except Exception as exc:
         logger.warning(
-            "Could not mark notification as failed for task %s due to DB error: %s", task_id, exc
+            "Could not mark notification %s as failed due to DB error: %s", notification_id, exc
         )
+
+
+def _is_transient(exc: Exception) -> bool:
+    """Return True for failures that can succeed on a later attempt.
+
+    Only connection-level database errors are retried: IntegrityError, ProgrammingError and
+    DataError are DBAPIError subclasses too, but they fail the same way every time.
+    ConnectionError and TimeoutError are covered by OSError.
+    """
+    if isinstance(exc, NotificationTransientError | OperationalError | InterfaceError | OSError):
+        return True
+    return isinstance(exc, DBAPIError) and exc.connection_invalidated
 
 
 @celery_app.task(
@@ -241,64 +180,128 @@ async def _mark_notification_failed(
 )
 def send_task_assignment_notification(
     self: Task,
-    task_id: int,
-    recipient_id: int,
-    assigned_by_id: int | None = None,
+    notification_id: int,
     simulate_transient_failures: int = 0,
     simulate_permanent_failure: bool = False,
 ) -> dict[str, Any]:
-    """Celery background task to deliver task assignment notifications.
+    """Celery background task to deliver one task assignment notification row.
 
-    - Retries temporary failures (network blips, DB timeouts) up to max_retries.
-    - Does NOT retry permanent failures (non-existent task or user, validation errors).
-    - Idempotent: running multiple times for the same assignment never duplicates notifications.
+    - Retries temporary failures (network blips, DB connection loss) up to max_retries.
+    - Does NOT retry permanent failures (non-existent task or user, validation errors) or
+      unexpected errors; both mark the row 'failed' with the error recorded.
+    - Idempotent: keyed on notification_id, so redelivery never sends the same row twice.
     """
     try:
         return run_async(
             _process_assignment_notification(
-                task_id=task_id,
-                recipient_id=recipient_id,
-                assigned_by_id=assigned_by_id,
+                notification_id=notification_id,
                 simulate_transient_failures=simulate_transient_failures,
                 simulate_permanent_failure=simulate_permanent_failure,
                 current_retry=self.request.retries,
             )
         )
-    except (
-        NotificationTransientError,
-        OperationalError,
-        DBAPIError,
-        ConnectionError,
-        TimeoutError,
-        OSError,
-    ) as exc:
+    except NotificationPermanentError as exc:
+        logger.error(
+            "Permanent failure for notification %s: %s. Not retrying.",
+            notification_id,
+            exc,
+        )
+        run_async(_mark_notification_failed(notification_id, str(exc)))
+        raise
+    except Exception as exc:
+        if not _is_transient(exc):
+            logger.exception(
+                "Unexpected error for notification %s: %s. Not retrying; marking failed.",
+                notification_id,
+                exc,
+            )
+            run_async(_mark_notification_failed(notification_id, f"{type(exc).__name__}: {exc}"))
+            raise
         if self.request.retries < self.max_retries:
             countdown = 2**self.request.retries
             logger.warning(
-                "Temporary failure sending notification for task %s (attempt %s/%s): %s. "
-                "Retrying in %ss...",
-                task_id,
+                "Temporary failure sending notification %s (attempt %s/%s): %s. Retrying in %ss...",
+                notification_id,
                 self.request.retries + 1,
                 self.max_retries,
                 exc,
                 countdown,
             )
             raise self.retry(exc=exc, countdown=countdown) from exc
-        else:
-            logger.error(
-                "Exhausted maximum retries (%s) for task %s notification: %s. Marking failed.",
-                self.max_retries,
-                task_id,
-                exc,
-            )
-            run_async(_mark_notification_failed(task_id, recipient_id, str(exc)))
-            raise
-    except NotificationPermanentError as exc:
         logger.error(
-            "Permanent failure for task %s notification to user %s: %s. Not retrying.",
-            task_id,
-            recipient_id,
+            "Exhausted maximum retries (%s) for notification %s: %s. Marking failed.",
+            self.max_retries,
+            notification_id,
             exc,
         )
-        run_async(_mark_notification_failed(task_id, recipient_id, str(exc)))
+        run_async(_mark_notification_failed(notification_id, str(exc)))
         raise
+
+
+def enqueue_assignment_notification(notification_id: int) -> None:
+    """Publish the delivery job for one outbox row.
+
+    Blocking (kombu publishes synchronously): call it via asyncio.to_thread from async code.
+    retry=False plus the broker socket timeouts in celery_app make a down broker fail fast;
+    the row stays 'pending' and the stale-pending sweep re-publishes it.
+    """
+    send_task_assignment_notification.apply_async(
+        kwargs={"notification_id": notification_id}, retry=False
+    )
+
+
+async def _find_stale_pending_notification_ids(
+    db: AsyncSession,
+    older_than_minutes: int,
+    limit: int,
+) -> list[int]:
+    cutoff = datetime.now(UTC) - timedelta(minutes=older_than_minutes)
+    ids = await db.scalars(
+        select(Notification.id)
+        .where(
+            Notification.type == "TASK_ASSIGNED",
+            Notification.status == "pending",
+            Notification.created_at < cutoff,
+        )
+        .order_by(Notification.id.asc())
+        .limit(limit)
+    )
+    return list(ids.all())
+
+
+async def _process_stale_pending_notifications(
+    older_than_minutes: int,
+    limit: int,
+    db: AsyncSession | None = None,
+) -> list[int]:
+    if db is not None:
+        return await _find_stale_pending_notification_ids(db, older_than_minutes, limit)
+
+    async with get_worker_db() as worker_db:
+        return await _find_stale_pending_notification_ids(worker_db, older_than_minutes, limit)
+
+
+@celery_app.task(name="app.tasks.notification_tasks.requeue_stale_assignment_notifications")
+def requeue_stale_assignment_notifications() -> dict[str, Any]:
+    """Celery Beat outbox sweep: re-publish assignment notifications stuck in 'pending'.
+
+    Covers a failed post-commit publish (broker down) and a lost job (worker crash outside
+    acks_late redelivery). Re-publishing a row that is still in flight is safe: the delivery
+    job locks the row and skips anything no longer 'pending'.
+    """
+    notification_ids = run_async(
+        _process_stale_pending_notifications(
+            older_than_minutes=settings.notification_requeue_after_minutes,
+            limit=settings.notification_requeue_batch_size,
+        )
+    )
+    for notification_id in notification_ids:
+        enqueue_assignment_notification(notification_id)
+
+    if notification_ids:
+        logger.warning(
+            "Re-queued %s stale pending assignment notifications: %s",
+            len(notification_ids),
+            notification_ids,
+        )
+    return {"requeued": len(notification_ids), "notification_ids": notification_ids}

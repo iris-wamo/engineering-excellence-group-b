@@ -13,6 +13,10 @@ class NotificationPermanentError(NotificationError):
     """Permanent/fatal failure that should NOT be retried (e.g. entity not found, invalid data)."""
 
 
+class NotificationNotFoundError(NotificationPermanentError):
+    """Raised when the notification row the job was dispatched for does not exist."""
+
+
 class TaskNotFoundError(NotificationPermanentError):
     """Raised when the target task does not exist."""
 

@@ -86,7 +86,8 @@ def test_beat_schedule_configuration() -> None:
 def test_celery_task_registration() -> None:
     assert "app.tasks.reminder_tasks.send_due_task_reminders" in celery_app.tasks
     task = celery_app.tasks["app.tasks.reminder_tasks.send_due_task_reminders"]
-    assert task.max_retries == 2
+    # Beat re-runs the sweep on its next tick, so failures are not retried
+    assert task.max_retries == 0
 
 
 @pytest.mark.unit
@@ -96,3 +97,15 @@ def test_send_due_task_reminders_task_invokes_process(mock_process: AsyncMock) -
     result = send_due_task_reminders(threshold_days=2)
     assert result["status"] == "success"
     mock_process.assert_called_once_with(threshold_days=2, dedup_window_hours=24)
+
+
+@pytest.mark.unit
+@patch("app.tasks.reminder_tasks._process_due_task_reminders", new_callable=AsyncMock)
+def test_send_due_task_reminders_failure_is_raised_not_retried(mock_process: AsyncMock) -> None:
+    mock_process.side_effect = ValueError("bug in reminder sweep")
+
+    with patch.object(send_due_task_reminders, "retry") as mock_retry:
+        with pytest.raises(ValueError, match="bug in reminder sweep"):
+            send_due_task_reminders()
+
+    mock_retry.assert_not_called()

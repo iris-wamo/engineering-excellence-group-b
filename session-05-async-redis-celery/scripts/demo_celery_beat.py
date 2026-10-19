@@ -251,6 +251,7 @@ async def run_demo() -> None:
 
         print("\n  • Flower Observability Service:")
         print(f"    - URL: http://localhost:{settings.flower_port}")
+        print("    - Docker login: FLOWER_BASIC_AUTH (default taskflow:taskflow)")
         print("    - Capabilities: Worker heartbeats, active tasks, retries, periodic schedules")
 
     await redis_client.aclose()

@@ -1,6 +1,6 @@
 """Integration tests for Celery Beat due-task reminders and deduplication."""
 
-from datetime import date, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -13,7 +13,7 @@ from app.models.notification import Notification
 from app.models.project_user import ProjectUser
 from app.models.task import Task
 from app.schemas.project import ProjectCreate
-from app.schemas.task import TaskCreate
+from app.schemas.task import TaskAssignRequest, TaskCreate
 from app.schemas.user import UserCreate
 from app.services.project_service import ProjectService
 from app.services.task_service import TaskService
@@ -45,7 +45,8 @@ async def beat_test_setup(db_session: AsyncSession) -> dict[str, Any]:
     )
     await db_session.commit()
 
-    today = date.today()
+    # Same calendar day the sweep uses
+    today = datetime.now(UTC).date()
 
     # 1. Due Today, assigned to dev, in progress -> Should be reminded
     task_due_today = await TaskService.create_task(
@@ -155,6 +156,42 @@ async def test_due_task_reminders_idempotent_no_duplicates(
     )
     notifs = (await db_session.scalars(stmt)).all()
     assert len(notifs) == 1
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_reassigned_task_reminds_new_assignee_within_dedup_window(
+    db_session: AsyncSession,
+    beat_test_setup: dict[str, Any],
+) -> None:
+    """Dedup is per (task, recipient): a new assignee is reminded even inside the window."""
+    task_due_today = beat_test_setup["task_due_today"]
+    dev = beat_test_setup["dev"]
+    lead = beat_test_setup["lead"]
+
+    first = await _execute_due_task_reminders(db_session, threshold_days=1)
+    assert first["reminders_created"] == 1
+
+    await TaskService.assign_task(
+        db_session,
+        task_id=task_due_today.id,
+        data=TaskAssignRequest(assignee_id=lead.id),
+        actor_id=lead.id,
+    )
+
+    second = await _execute_due_task_reminders(db_session, threshold_days=1)
+    assert second["reminders_created"] == 1
+    assert second["reminded_task_ids"] == [task_due_today.id]
+
+    rows = await db_session.execute(
+        select(Notification.recipient_id)
+        .where(
+            Notification.task_id == task_due_today.id,
+            Notification.type == "TASK_DUE_REMINDER",
+        )
+        .order_by(Notification.id)
+    )
+    assert [recipient_id for (recipient_id,) in rows] == [dev.id, lead.id]
 
 
 @pytest.mark.integration

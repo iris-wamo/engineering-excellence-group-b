@@ -1,11 +1,10 @@
 """Celery Beat periodic task for due-task reminders with overlap prevention."""
 
 import logging
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import redis.asyncio as aioredis
-from celery import Task
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,9 +31,10 @@ async def _execute_due_task_reminders(
 
     Filters for incomplete tasks assigned to a user whose due date is on or before
     the threshold. Uses batch querying to prevent N+1 database lookups and ensures
-    assignees receive at most one reminder within the deduplication window.
+    each assignee receives at most one reminder per task within the deduplication window.
     """
-    today = date.today()
+    # Due dates are compared against the UTC calendar day, not the worker's local timezone
+    today = datetime.now(UTC).date()
     max_due = today + timedelta(days=threshold_days)
     min_due = today - timedelta(days=overdue_cutoff_days)
 
@@ -57,35 +57,37 @@ async def _execute_due_task_reminders(
 
     cutoff = datetime.now(UTC) - timedelta(hours=dedup_window_hours)
 
-    # Batch-fetch all task IDs that were already reminded in the deduplication window
+    # Batch-fetch the (task, recipient) pairs already reminded in the deduplication window.
+    # Keyed per recipient so a task reassigned within the window still reminds its new
+    # assignee.
     candidate_task_ids = [t.id for t in tasks]
-    already_reminded_task_ids: set[int] = set()
+    already_reminded: set[tuple[int | None, int]] = set()
     if candidate_task_ids:
-        existing_notifs = (
-            await db.scalars(
-                select(Notification.task_id).where(
-                    Notification.task_id.in_(candidate_task_ids),
-                    Notification.type == "TASK_DUE_REMINDER",
-                    Notification.created_at >= cutoff,
-                )
+        existing_notifs = await db.execute(
+            select(Notification.task_id, Notification.recipient_id).where(
+                Notification.task_id.in_(candidate_task_ids),
+                Notification.type == "TASK_DUE_REMINDER",
+                Notification.created_at >= cutoff,
             )
-        ).all()
-        already_reminded_task_ids = {nid for nid in existing_notifs if nid is not None}
+        )
+        already_reminded = {(task_id, recipient_id) for task_id, recipient_id in existing_notifs}
 
     for task in tasks:
-        assert task.assignee_id is not None  # Guaranteed by query filter
+        recipient_id = task.assignee_id
+        if recipient_id is None:  # excluded by the query; narrows the type
+            continue
 
-        if task.id in already_reminded_task_ids:
+        if (task.id, recipient_id) in already_reminded:
             reminders_skipped += 1
             logger.debug(
                 "Skipping reminder for task %s (recipient %s): already sent in dedup window",
                 task.id,
-                task.assignee_id,
+                recipient_id,
             )
             continue
 
         notification = Notification(
-            recipient_id=task.assignee_id,
+            recipient_id=recipient_id,
             task_id=task.id,
             type="TASK_DUE_REMINDER",
             status="sent",
@@ -156,12 +158,10 @@ async def _process_due_task_reminders(
 
 
 @celery_app.task(
-    bind=True,
     name="app.tasks.reminder_tasks.send_due_task_reminders",
-    max_retries=2,
+    max_retries=0,
 )
 def send_due_task_reminders(
-    self: Task,
     threshold_days: int | None = None,
     dedup_window_hours: int = 24,
 ) -> dict[str, Any]:
@@ -169,6 +169,10 @@ def send_due_task_reminders(
 
     Prevents overlapping executions via Redis distributed lock and deduplicates
     reminders within the specified window.
+
+    Failures are not retried: Beat runs the sweep again on its next tick, and the
+    deduplication window makes a re-run safe. A retry would only race the next tick
+    for the lock, and retrying deterministic errors (IntegrityError, bugs) is wasted work.
     """
     logger.info("Executing scheduled due-task reminder sweep.")
     try:
@@ -178,6 +182,6 @@ def send_due_task_reminders(
                 dedup_window_hours=dedup_window_hours,
             )
         )
-    except Exception as exc:
-        logger.exception("Error executing due-task reminders sweep: %s", exc)
-        raise self.retry(exc=exc, countdown=10) from exc
+    except Exception:
+        logger.exception("Due-task reminder sweep failed; Beat runs it again on the next tick.")
+        raise

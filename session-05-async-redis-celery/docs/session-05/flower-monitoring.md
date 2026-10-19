@@ -48,17 +48,25 @@ Flower is configured as a dedicated container service in `compose.yaml`:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
+    entrypoint: []  # only the api service runs migrations
     command: ["celery", "-A", "app.core.celery_app", "flower", "--port=5555"]
     ports:
-      - "5555:5555"
+      - "127.0.0.1:5555:5555"
     environment:
+      DATABASE_URL: postgresql+asyncpg://...@db:5432/taskflow  # required by app Settings
+      MONGO_URL: mongodb://mongo:27017
+      MONGO_DB: taskflow
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
+      FLOWER_BASIC_AUTH: ${FLOWER_BASIC_AUTH:-taskflow:taskflow}
     depends_on:
       redis:
         condition: service_healthy
 ```
+
+- **Settings**: `-A app.core.celery_app` imports the app `Settings`, which require `DATABASE_URL`, `MONGO_URL`, and `MONGO_DB` even though Flower only talks to Redis. Without them the container fails at startup with a pydantic `Field required` error.
+- **Access**: Flower can revoke and terminate tasks and shows task arguments, so it is published on the host loopback only and protected by basic auth. Set `FLOWER_BASIC_AUTH=user:password` in your shell or `.env` to override the dev default `taskflow:taskflow`.
 
 Start the containerized stack:
 ```bash
@@ -70,7 +78,7 @@ To run Flower locally against the Docker Redis broker:
 ```bash
 make flower
 ```
-Flower starts at **`http://localhost:5555`**.
+Flower starts at **`http://127.0.0.1:5555`**. The local target binds to loopback and has no auth.
 
 ---
 
@@ -79,9 +87,9 @@ Flower starts at **`http://localhost:5555`**.
 Flower exposes an HTTP REST API in addition to its web UI:
 
 ```bash
-# Check worker status via Flower API
-curl -s http://localhost:5555/api/workers | jq .
+# Check worker status via Flower API (drop -u for the unauthenticated `make flower`)
+curl -s -u taskflow:taskflow http://localhost:5555/api/workers | jq .
 
 # Check active tasks via Flower API
-curl -s http://localhost:5555/api/tasks?limit=5 | jq .
+curl -s -u taskflow:taskflow "http://localhost:5555/api/tasks?limit=5" | jq .
 ```

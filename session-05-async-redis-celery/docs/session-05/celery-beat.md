@@ -16,7 +16,7 @@ and idempotency strategies for due-task reminders.
 ### The Solution: Celery Beat
 - **Celery Beat** is a scheduler process that reads a configured periodic task schedule and posts execution messages to the Celery broker (Redis list `celery`) at specified intervals.
 - The Celery worker processes the messages asynchronously just like any other task.
-- Beat maintains its own schedule state in a schedule file (e.g. `/tmp/celerybeat-schedule` in Docker or local disk), tracking when each task was last enqueued.
+- Beat maintains its own schedule state in a schedule file (e.g. `/tmp/celerybeat-schedule` in Docker or local disk), tracking when each task was last enqueued. In Docker that file is container-local and is **not** persisted across container recreation. Both schedule entries are fixed intervals, so a fresh Beat just runs them on its first tick.
 
 ```
 ┌──────────────────┐
@@ -103,22 +103,29 @@ A task qualifies for a reminder only if all four conditions are met:
 3. `Task.status != TaskStatus.done` (completed tasks do not need reminders)
 4. `Task.due_date <= today + timedelta(days=threshold_days)` (tasks due today, soon, or overdue)
 
+`today` is the **UTC** calendar day (`datetime.now(UTC).date()`), not the worker's local date, so a container running in another timezone does not shift reminders by a day.
+
 ### Entity-Level Deduplication Window
 Even without concurrent overlap, periodic jobs tick repeatedly (e.g. every minute or hour). To avoid spamming assignees with dozens of reminders for the same deliverable:
-- Before inserting a `Notification` with `type="TASK_DUE_REMINDER"`, the worker queries existing notifications:
+- Before inserting any `Notification` with `type="TASK_DUE_REMINDER"`, the worker fetches the `(task_id, recipient_id)` pairs already reminded in the window, in one query for all candidate tasks (no N+1):
   ```python
   cutoff = datetime.now(UTC) - timedelta(hours=dedup_window_hours)  # default: 24h
-  existing = (await db.scalars(
-      select(Notification).where(
-          Notification.task_id == task.id,
-          Notification.recipient_id == task.assignee_id,
-          Notification.type == "TASK_DUE_REMINDER",
-          Notification.created_at >= cutoff,
+  already_reminded = {
+      (task_id, recipient_id)
+      for task_id, recipient_id in await db.execute(
+          select(Notification.task_id, Notification.recipient_id).where(
+              Notification.task_id.in_(candidate_task_ids),
+              Notification.type == "TASK_DUE_REMINDER",
+              Notification.created_at >= cutoff,
+          )
       )
-  )).first()
+  }
   ```
-- If an existing reminder exists within the last 24 hours, the task is skipped and logged as `reminders_skipped += 1`.
-- This ensures **at most one reminder per 24 hours per task** regardless of how frequently Celery Beat runs.
+- If `(task.id, task.assignee_id)` is in that set, the task is skipped and counted in `reminders_skipped`.
+- This ensures **at most one reminder per 24 hours per task per assignee** regardless of how frequently Celery Beat runs. A task reassigned within the window still reminds its new assignee.
+
+### Failure Handling
+`send_due_task_reminders` does not retry (`max_retries=0`). Any failure is logged with a traceback and raised so Flower shows it, and Beat runs the sweep again on its next tick (60s by default). The dedup window makes that re-run safe.
 
 ---
 

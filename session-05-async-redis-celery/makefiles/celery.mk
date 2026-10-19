@@ -7,8 +7,8 @@ celery-beat: ## Start Celery Beat periodic scheduler locally
 	uv run celery -A app.core.celery_app beat -l info
 
 .PHONY: flower
-flower: ## Start Flower dashboard locally on port 5555
-	uv run celery -A app.core.celery_app flower --port=5555
+flower: ## Start Flower dashboard locally on 127.0.0.1:5555
+	uv run celery -A app.core.celery_app flower --address=127.0.0.1 --port=5555
 
 .PHONY: celery-demo
 celery-demo: ## Run end-to-end Celery jobs demonstration (success, retry, idempotency, failure)

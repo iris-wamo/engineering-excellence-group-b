@@ -506,3 +506,26 @@ async def test_idempotent_import_retry_does_not_notify_again(
     assert len(notifications) == 1
     assert broker_publish.call_count == 1
     assert len(await stream_events(redis_client)) == 1
+
+
+async def test_import_is_recorded_success_before_the_assignment_is_announced(
+    db_session: AsyncSession, factory: DataFactory
+) -> None:
+    """A slow or failing broker/Redis publish must not hold the import in PENDING."""
+    project = await factory.project()
+    assignee = await factory.member(project)
+    raw = {"title": "Announce After Success", "project_id": project.id, "assignee_id": assignee.id}
+    statuses_seen: list[str] = []
+
+    async def record_import_status(task: Task, notification_id: int, actor_id: int | None) -> None:
+        doc = await get_raw_task_imports_collection().find_one({"postgres_task_id": task.id})
+        statuses_seen.append(doc["status"] if doc else "missing")
+
+    with patch(
+        "app.services.task_import_service.announce_new_task_assignee",
+        side_effect=record_import_status,
+    ):
+        result = await TaskImportService.import_raw_task(db_session, raw)
+
+    assert result.status == "SUCCESS"
+    assert statuses_seen == ["SUCCESS"]

@@ -291,9 +291,6 @@ class TaskImportService:
                 updated_at=updated_at,
             )
 
-        if notification_id is not None:
-            await announce_new_task_assignee(task, notification_id, actor_id)
-
         # Stage 2: Post-Commit Mongo Status Update
         # The PostgreSQL commit succeeded; failures here must NOT mark the task FAILED.
         updated_at = datetime.now(UTC)
@@ -316,6 +313,11 @@ class TaskImportService:
                 mongo_exc,
                 exc_info=True,
             )
+
+        # Stage 3: queue the notification and publish the event only after the import is
+        # recorded as SUCCESS, so a slow or failing broker/Redis never holds it in PENDING.
+        if notification_id is not None:
+            await announce_new_task_assignee(task, notification_id, actor_id)
 
         return TaskImportResponse(
             import_id=import_id_str,

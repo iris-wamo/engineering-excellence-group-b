@@ -5,17 +5,22 @@ Demonstrates:
 2. Automated reminder generation into the notification table.
 3. Concurrency overlap protection via Redis distributed locking.
 4. Idempotent duplicate prevention (no spamming on consecutive scheduler ticks).
-5. Celery Beat periodic schedule inspection and Flower connectivity.
+5. Celery Beat periodic schedule inspection and where to find Flower.
+
+Safe to run next to the Compose `celery-beat` service: the demo uses its own lock key
+(never the real sweep's lock), limits its sweeps to its own project, and runs inside one
+transaction that is rolled back at the end, so the real sweep never sees its rows and the
+database is left as it was.
 """
 
 import asyncio
 import sys
 import time
-from datetime import date, timedelta
+from datetime import UTC, datetime, timedelta
 
 import redis.asyncio as aioredis
 from sqlalchemy import delete, func, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.core.celery_app import celery_app
 from app.core.config import settings
@@ -27,6 +32,9 @@ from app.models.task import Task
 from app.models.user import User
 from app.tasks.locks import acquire_redis_lock, release_redis_lock
 from app.tasks.reminder_tasks import REMINDER_LOCK_KEY, _process_due_task_reminders
+
+# A separate lock, so the demo never blocks or releases the real Beat sweep's lock
+DEMO_LOCK_KEY = f"{REMINDER_LOCK_KEY}:demo"
 
 
 def banner(title: str) -> None:
@@ -53,18 +61,21 @@ async def run_demo() -> None:
 
     # 2. Connect to Postgres
     engine = create_async_engine(str(settings.database_url))
-    sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+    connection = await engine.connect()
+    outer = await connection.begin()
+    # Commits inside the demo (and the sweep) become savepoints of this outer transaction,
+    # which is rolled back at the end.
+    db = AsyncSession(
+        bind=connection, expire_on_commit=False, join_transaction_mode="create_savepoint"
+    )
 
-    async with sessionmaker() as db:
+    try:
         try:
             res = await db.execute(select(func.current_database()))
             print(f"[OK] Connected to Postgres Database: /{res.scalar()}")
         except Exception as exc:
             print(f"[FAIL] Could not connect to Postgres: {exc}")
             sys.exit(1)
-
-        # Ensure lock is clean
-        await redis_client.delete(REMINDER_LOCK_KEY)
 
         # 3. Setup test data
         step("Setting up Test Tasks and Users for Due-Date Scenarios")
@@ -104,7 +115,8 @@ async def run_demo() -> None:
         )
         await db.commit()
 
-        today = date.today()
+        # The sweep compares due dates with the UTC calendar day
+        today = datetime.now(UTC).date()
 
         # Task 1: Due Today, Incomplete, Assigned -> MUST RECEIVE REMINDER
         task_due_today = Task(
@@ -166,6 +178,8 @@ async def run_demo() -> None:
             threshold_days=1,
             db=db,
             redis_client=redis_client,
+            lock_key=DEMO_LOCK_KEY,
+            project_id=project.id,
         )
         latency = (time.perf_counter() - t0) * 1000
 
@@ -196,15 +210,17 @@ async def run_demo() -> None:
         # Step 2: Overlapping Run Prevention (Redis Distributed Lock)
         step("Step 2: Simulate Overlapping Scheduler Run (Redis Lock Overlap Check)")
         print("  Acquiring Redis lock artificially to simulate another long-running sweep...")
-        lock_token = await acquire_redis_lock(redis_client, REMINDER_LOCK_KEY, timeout_seconds=60)
+        lock_token = await acquire_redis_lock(redis_client, DEMO_LOCK_KEY, timeout_seconds=60)
         assert lock_token is not None
-        print(f"  • Active Lock Key '{REMINDER_LOCK_KEY}' held with token {lock_token[:8]}...")
+        print(f"  • Active Lock Key '{DEMO_LOCK_KEY}' held with token {lock_token[:8]}...")
 
         print("  Attempting concurrent sweep while lock is active...")
         result_overlap = await _process_due_task_reminders(
             threshold_days=1,
             db=db,
             redis_client=redis_client,
+            lock_key=DEMO_LOCK_KEY,
+            project_id=project.id,
         )
         print(f"  • Concurrent Sweep Response: {result_overlap}")
         assert result_overlap["status"] == "skipped"
@@ -212,7 +228,7 @@ async def run_demo() -> None:
         print("  [PASS] Overlapping run was rejected immediately without duplicate work.")
 
         # Release artificial lock
-        released = await release_redis_lock(redis_client, REMINDER_LOCK_KEY, lock_token)
+        released = await release_redis_lock(redis_client, DEMO_LOCK_KEY, lock_token)
         assert released
         print("  • Released simulated lock successfully.")
 
@@ -223,6 +239,8 @@ async def run_demo() -> None:
             threshold_days=1,
             db=db,
             redis_client=redis_client,
+            lock_key=DEMO_LOCK_KEY,
+            project_id=project.id,
         )
         print(f"  • Second Sweep Response: {result_sweep_2}")
         assert result_sweep_2["status"] == "success"
@@ -251,11 +269,16 @@ async def run_demo() -> None:
 
         print("\n  • Flower Observability Service:")
         print(f"    - URL: http://localhost:{settings.flower_port}")
-        print("    - Docker login: FLOWER_BASIC_AUTH (default taskflow:taskflow)")
+        print("    - Docker login: the FLOWER_BASIC_AUTH user:password from .env")
         print("    - Capabilities: Worker heartbeats, active tasks, retries, periodic schedules")
 
-    await redis_client.aclose()
-    await engine.dispose()
+    finally:
+        await db.close()
+        await outer.rollback()
+        await connection.close()
+        await redis_client.aclose()
+        await engine.dispose()
+    print("\n  • Rolled back the demo transaction: no demo rows were kept.")
 
     banner("All Celery Beat & Due Reminder Behaviors Verified Successfully!")
 

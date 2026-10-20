@@ -7,8 +7,9 @@ helpers in tests/fixtures/events.py. Test modules import helpers and types from 
 never from this file.
 """
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Iterator
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -46,6 +47,20 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             continue
         folder = path.relative_to(tests_root).parts[0]
         item.add_marker(folder if folder in _FOLDER_MARKERS else "integration")
+
+
+@pytest.fixture(autouse=True)
+def broker_publish() -> Iterator[MagicMock]:
+    """Stub the Celery publish for every test so none reaches a real broker.
+
+    Without this, every assignment made in a test would queue a job carrying a test-DB
+    notification id in the dev Redis, where a dev worker would apply it to unrelated rows.
+    Tests that assert on dispatch can take this fixture or patch apply_async themselves.
+    """
+    with patch(
+        "app.tasks.notification_tasks.send_task_assignment_notification.apply_async"
+    ) as mock_apply_async:
+        yield mock_apply_async
 
 
 @pytest.fixture()

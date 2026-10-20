@@ -69,6 +69,8 @@ services:
       MONGO_URL: mongodb://mongo:27017
       MONGO_DB: ${MONGO_DB:-taskflow}
       REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
 
     ports:
       - "8000:8000"
@@ -80,6 +82,62 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    # Skip the image entrypoint's `alembic upgrade head`: only the api service migrates,
+    # so containers starting together never race on the same migration.
+    entrypoint: []
+    command: ["celery", "-A", "app.core.celery_app", "worker", "-l", "info"]
+
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-taskflow}:${POSTGRES_PASSWORD:-taskflow}@db:5432/${POSTGRES_DB:-taskflow}
+      MONGO_URL: mongodb://mongo:27017
+      MONGO_DB: ${MONGO_DB:-taskflow}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+    healthcheck:
+      disable: true
+
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    # Only the api service migrates (see celery-worker).
+    entrypoint: []
+    # Runs the outbox sweep that re-publishes stuck 'pending' notifications. The schedule
+    # file is container-local and not persisted; the entry is a fixed interval, so after a
+    # restart Beat simply runs it on its first tick.
+    command: ["celery", "-A", "app.core.celery_app", "beat", "-l", "info", "--schedule", "/tmp/celerybeat-schedule"]
+
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-taskflow}:${POSTGRES_PASSWORD:-taskflow}@db:5432/${POSTGRES_DB:-taskflow}
+      MONGO_URL: mongodb://mongo:27017
+      MONGO_DB: ${MONGO_DB:-taskflow}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+    healthcheck:
+      disable: true
 
 volumes:
   pgdata:

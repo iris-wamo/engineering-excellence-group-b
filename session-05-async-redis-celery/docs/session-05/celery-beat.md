@@ -50,7 +50,7 @@ celery_app.conf.update(
         },
         "send-due-task-reminders-periodic": {
             "task": "app.tasks.reminder_tasks.send_due_task_reminders",
-            "schedule": settings.celery_beat_schedule_interval_seconds,  # default: 60.0s
+            "schedule": settings.due_reminder_interval_seconds,  # default: 60.0s
         },
     },
 )
@@ -58,7 +58,7 @@ celery_app.conf.update(
 
 The same Beat process also runs the assignment-notification outbox sweep from #101, which re-publishes `TASK_ASSIGNED` rows left `pending` (see [`celery-jobs.md`](celery-jobs.md) §5).
 
-In development and testing, `celery_beat_schedule_interval_seconds` is set to 60 seconds (or overridden via environment variables). In production, this can be customized to a crontab expression (e.g. every morning at 09:00 UTC).
+In development and testing, `due_reminder_interval_seconds` (`DUE_REMINDER_INTERVAL_SECONDS`) is 60 seconds. The lock TTL is derived from it (below); the dedup window (`DUE_REMINDER_DEDUP_HOURS`, 24h) is a separate setting because it is how often a person may be reminded, not how often the sweep checks. In production, this can be customized to a crontab expression (e.g. every morning at 09:00 UTC).
 
 ---
 
@@ -75,8 +75,9 @@ Without concurrency control:
 To prevent overlapping runs across multiple Celery workers:
 1. The worker attempts to acquire an exclusive lock in Redis:
    ```python
-   acquired = await redis_client.set(lock_key, token, nx=True, ex=300)
+   acquired = await redis_client.set(lock_key, token, nx=True, ex=settings.due_reminder_lock_ttl_seconds)
    ```
+   The TTL is five sweep intervals, at least 60s (300s at the 60s default). While the sweep runs, a background task renews it every third of the TTL with a token-checked Lua `EXPIRE`, so a sweep slower than the TTL keeps its lock and the next Beat tick still skips. The TTL only matters if the worker dies mid-sweep: the lock then expires and the next tick takes over. If a renewal finds the lock gone, it logs a warning.
 2. If `token is None` (the lock is already held by an ongoing run):
    The task logs a warning and exits cleanly without error or duplicate queries:
    ```json
@@ -90,7 +91,7 @@ To prevent overlapping runs across multiple Celery workers:
        return 0
    end
    ```
-   *Why Lua?* If the task took longer than `ex=300` seconds and the lock expired, another worker might have acquired it. A simple `DEL` command would inadvertently release the *new* worker's lock. The Lua script guarantees that only the process holding the matching UUID token can delete the key.
+   *Why Lua?* If the holder died and its lock expired, another worker might have acquired it. A simple `DEL` command would inadvertently release the *new* worker's lock. The Lua script guarantees that only the process holding the matching UUID token can delete the key.
 
 ---
 
@@ -107,22 +108,29 @@ A task qualifies for a reminder only if all four conditions are met:
 
 ### Entity-Level Deduplication Window
 Even without concurrent overlap, periodic jobs tick repeatedly (e.g. every minute or hour). To avoid spamming assignees with dozens of reminders for the same deliverable:
-- Before inserting any `Notification` with `type="TASK_DUE_REMINDER"`, the worker fetches the `(task_id, recipient_id)` pairs already reminded in the window, in one query for all candidate tasks (no N+1):
+- Before inserting any `Notification` with `type="TASK_DUE_REMINDER"`, the worker fetches the `(task_id, recipient_id, due_date)` reminders already sent in the window, in one query per batch of candidate tasks (no N+1):
   ```python
   cutoff = datetime.now(UTC) - timedelta(hours=dedup_window_hours)  # default: 24h
   already_reminded = {
-      (task_id, recipient_id)
-      for task_id, recipient_id in await db.execute(
-          select(Notification.task_id, Notification.recipient_id).where(
-              Notification.task_id.in_(candidate_task_ids),
+      (task_id, recipient_id, due_date)
+      for task_id, recipient_id, due_date in await db.execute(
+          select(
+              Notification.task_id,
+              Notification.recipient_id,
+              Notification.payload["due_date"].astext,
+          ).where(
+              Notification.task_id.in_(batch_task_ids),
               Notification.type == "TASK_DUE_REMINDER",
               Notification.created_at >= cutoff,
           )
       )
   }
   ```
-- If `(task.id, task.assignee_id)` is in that set, the task is skipped and counted in `reminders_skipped`.
-- This ensures **at most one reminder per 24 hours per task per assignee** regardless of how frequently Celery Beat runs. A task reassigned within the window still reminds its new assignee.
+- If `(task.id, task.assignee_id, task.due_date)` is in that set, the task is skipped and counted in `reminders_skipped`.
+- This ensures **at most one reminder per 24 hours per task, assignee and due date** regardless of how frequently Celery Beat runs. A task reassigned within the window still reminds its new assignee, and a task whose due date moves is reminded again for the new date.
+
+### Batches and Row Isolation
+Candidate tasks are read `DUE_REMINDER_BATCH_SIZE` (500) at a time with keyset pagination on `(due_date, id)`, and each batch is committed on its own, so a large backlog never sits in memory or in one long transaction. Each reminder is inserted in its own savepoint: a row that fails (for example, its task was deleted meanwhile) is logged, counted in `reminders_failed` and skipped, and the rest of the batch is kept.
 
 ### Failure Handling
 `send_due_task_reminders` does not retry (`max_retries=0`). Any failure is logged with a traceback and raised so Flower shows it, and Beat runs the sweep again on its next tick (60s by default). The dedup window makes that re-run safe.

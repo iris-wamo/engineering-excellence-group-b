@@ -96,7 +96,7 @@ def test_send_due_task_reminders_task_invokes_process(mock_process: AsyncMock) -
     mock_process.return_value = {"status": "success", "reminders_created": 2}
     result = send_due_task_reminders(threshold_days=2)
     assert result["status"] == "success"
-    mock_process.assert_called_once_with(threshold_days=2, dedup_window_hours=24)
+    mock_process.assert_called_once_with(threshold_days=2, dedup_window_hours=None)
 
 
 @pytest.mark.unit

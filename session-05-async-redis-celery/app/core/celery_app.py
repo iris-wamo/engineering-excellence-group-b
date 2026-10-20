@@ -38,7 +38,7 @@ celery_app.conf.update(
         },
         "send-due-task-reminders-periodic": {
             "task": "app.tasks.reminder_tasks.send_due_task_reminders",
-            "schedule": settings.celery_beat_schedule_interval_seconds,
+            "schedule": settings.due_reminder_interval_seconds,
         },
     },
 )

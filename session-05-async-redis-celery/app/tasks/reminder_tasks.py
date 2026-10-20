@@ -8,14 +8,16 @@ import redis.asyncio as aioredis
 from sqlalchemy import select, tuple_
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
+from taskflow_shared.concurrency import run_async
+from taskflow_shared.locks import distributed_lock
 
 from app.core.celery_app import celery_app
 from app.core.config import settings
+from app.db.redis import create_redis_client
 from app.models.enums import TaskStatus
 from app.models.notification import Notification
 from app.models.task import Task as TaskModel
-from app.tasks.db import get_worker_db, run_async
-from app.tasks.locks import distributed_lock
+from app.tasks.db import get_worker_db
 
 logger = logging.getLogger(__name__)
 
@@ -177,40 +179,46 @@ async def _process_due_task_reminders(
         dedup_window_hours if dedup_window_hours is not None else settings.due_reminder_dedup_hours
     )
 
-    async with distributed_lock(
-        lock_key,
-        timeout_seconds=settings.due_reminder_lock_ttl_seconds,
-        redis_client=redis_client,
-    ) as token:
-        if token is None:
-            logger.warning(
-                "Another due-task reminder sweep is currently in progress. "
-                "Skipping overlapping run."
-            )
-            return {
-                "status": "skipped",
-                "reason": "overlapping_run",
-                "reminders_created": 0,
-                "reminders_skipped": 0,
-            }
+    # The caller's client (tests, the demo) stays open; one created here is closed here.
+    client = redis_client if redis_client is not None else create_redis_client()
+    try:
+        async with distributed_lock(
+            client,
+            lock_key,
+            timeout_seconds=settings.due_reminder_lock_ttl_seconds,
+        ) as token:
+            if token is None:
+                logger.warning(
+                    "Another due-task reminder sweep is currently in progress. "
+                    "Skipping overlapping run."
+                )
+                return {
+                    "status": "skipped",
+                    "reason": "overlapping_run",
+                    "reminders_created": 0,
+                    "reminders_skipped": 0,
+                }
 
-        if db is not None:
-            return await _execute_due_task_reminders(
-                db,
-                threshold_days=target_threshold,
-                dedup_window_hours=target_dedup_hours,
-                batch_size=settings.due_reminder_batch_size,
-                project_id=project_id,
-            )
+            if db is not None:
+                return await _execute_due_task_reminders(
+                    db,
+                    threshold_days=target_threshold,
+                    dedup_window_hours=target_dedup_hours,
+                    batch_size=settings.due_reminder_batch_size,
+                    project_id=project_id,
+                )
 
-        async with get_worker_db() as worker_db:
-            return await _execute_due_task_reminders(
-                worker_db,
-                threshold_days=target_threshold,
-                dedup_window_hours=target_dedup_hours,
-                batch_size=settings.due_reminder_batch_size,
-                project_id=project_id,
-            )
+            async with get_worker_db() as worker_db:
+                return await _execute_due_task_reminders(
+                    worker_db,
+                    threshold_days=target_threshold,
+                    dedup_window_hours=target_dedup_hours,
+                    batch_size=settings.due_reminder_batch_size,
+                    project_id=project_id,
+                )
+    finally:
+        if redis_client is None:
+            await client.aclose()
 
 
 @celery_app.task(

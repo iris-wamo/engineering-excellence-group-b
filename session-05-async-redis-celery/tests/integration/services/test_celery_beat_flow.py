@@ -9,6 +9,7 @@ import pytest
 from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from taskflow_shared.locks import acquire_redis_lock, distributed_lock
 
 from app.models.enums import ProjectRole, TaskPriority, TaskStatus
 from app.models.notification import Notification
@@ -21,7 +22,6 @@ from app.services.project_service import ProjectService
 from app.services.task_service import TaskService
 from app.services.user_service import UserService
 from app.tasks import reminder_tasks
-from app.tasks.locks import acquire_redis_lock, distributed_lock
 from app.tasks.reminder_tasks import (
     _execute_due_task_reminders,
     _process_due_task_reminders,
@@ -347,7 +347,7 @@ async def test_lock_is_renewed_while_the_holder_runs(redis_client: Redis) -> Non
     """A run longer than the lock TTL keeps the lock, so the next tick cannot overlap it."""
     key = "taskflow:locks:test-renewal"
 
-    async with distributed_lock(key, timeout_seconds=1, redis_client=redis_client) as token:
+    async with distributed_lock(redis_client, key, timeout_seconds=1) as token:
         assert token is not None
         await asyncio.sleep(2.5)  # 2.5x the TTL
         assert await redis_client.get(key) == token

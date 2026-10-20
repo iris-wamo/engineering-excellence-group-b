@@ -71,7 +71,9 @@ Without concurrency control:
 2. Both would see the same candidate tasks.
 3. Both would attempt to create notifications, leading to race conditions and duplicate reminders.
 
-### Distributed Lock Implementation (`app/tasks/locks.py`)
+### Distributed Lock Implementation (`taskflow_shared.locks`)
+The lock is domain-free, so it lives in the shared package (`packages/taskflow_shared/taskflow_shared/locks/redis_lock.py`). The sweep passes it a client from `app.db.redis.create_redis_client()`, so lock commands get the same 2s connect and read timeouts as every other Redis call instead of waiting forever on a hung server, and closes that client afterwards.
+
 To prevent overlapping runs across multiple Celery workers:
 1. The worker attempts to acquire an exclusive lock in Redis:
    ```python

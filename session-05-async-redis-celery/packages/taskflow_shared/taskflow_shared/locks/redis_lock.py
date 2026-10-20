@@ -1,4 +1,4 @@
-"""Distributed locking utilities backed by Redis for Celery tasks."""
+"""Distributed lock on Redis: SET NX EX, token-checked release, and renewal while held."""
 
 import asyncio
 import contextlib
@@ -8,8 +8,6 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 import redis.asyncio as aioredis
-
-from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -87,28 +85,25 @@ async def _keep_lock_alive(
 
 @asynccontextmanager
 async def distributed_lock(
+    redis_client: aioredis.Redis,
     lock_key: str,
     timeout_seconds: int = 300,
-    redis_client: aioredis.Redis | None = None,
 ) -> AsyncGenerator[str | None, None]:
     """Async context manager for acquiring and releasing a Redis distributed lock.
 
     Yields the lock token if acquired, or None if the lock is already held. While the
     block runs, the lock is renewed in the background, so it only expires (after
-    timeout_seconds) if the holder dies without releasing it.
+    timeout_seconds) if the holder dies without releasing it. The caller owns
+    redis_client and closes it.
     """
-    client = redis_client
-    owns_client = False
-    if client is None:
-        client = aioredis.from_url(str(settings.redis_url), decode_responses=True)
-        owns_client = True
-
     token: str | None = None
     keeper: asyncio.Task[None] | None = None
     try:
-        token = await acquire_redis_lock(client, lock_key, timeout_seconds=timeout_seconds)
+        token = await acquire_redis_lock(redis_client, lock_key, timeout_seconds=timeout_seconds)
         if token is not None:
-            keeper = asyncio.create_task(_keep_lock_alive(client, lock_key, token, timeout_seconds))
+            keeper = asyncio.create_task(
+                _keep_lock_alive(redis_client, lock_key, token, timeout_seconds)
+            )
         yield token
     finally:
         if keeper is not None:
@@ -116,6 +111,4 @@ async def distributed_lock(
             with contextlib.suppress(asyncio.CancelledError):
                 await keeper
         if token is not None:
-            await release_redis_lock(client, lock_key, token)
-        if owns_client and client is not None:
-            await client.aclose()
+            await release_redis_lock(redis_client, lock_key, token)

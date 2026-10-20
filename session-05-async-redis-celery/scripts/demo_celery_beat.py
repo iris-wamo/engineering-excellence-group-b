@@ -18,19 +18,19 @@ import sys
 import time
 from datetime import UTC, datetime, timedelta
 
-import redis.asyncio as aioredis
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from taskflow_shared.locks import acquire_redis_lock, release_redis_lock
 
 from app.core.celery_app import celery_app
 from app.core.config import settings
+from app.db.redis import create_redis_client
 from app.models.enums import ProjectRole, TaskPriority, TaskStatus
 from app.models.notification import Notification
 from app.models.project import Project
 from app.models.project_user import ProjectUser
 from app.models.task import Task
 from app.models.user import User
-from app.tasks.locks import acquire_redis_lock, release_redis_lock
 from app.tasks.reminder_tasks import REMINDER_LOCK_KEY, _process_due_task_reminders
 
 # A separate lock, so the demo never blocks or releases the real Beat sweep's lock
@@ -51,7 +51,7 @@ async def run_demo() -> None:
     banner("Celery Beat Due-Task Reminders & Overlap Prevention")
 
     # 1. Connect to Redis
-    redis_client = aioredis.from_url(str(settings.redis_url), decode_responses=True)
+    redis_client = create_redis_client()
     try:
         await redis_client.ping()
         print(f"[OK] Connected to Redis Broker at {settings.redis_url}")

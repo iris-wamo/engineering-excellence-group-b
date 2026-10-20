@@ -1,15 +1,17 @@
 """Exceptions for Celery background tasks distinguishing retryable and non-retryable failures."""
 
+from taskflow_shared.errors import PermanentError, TransientError
+
 
 class NotificationError(Exception):
     """Base exception for notification background task failures."""
 
 
-class NotificationTransientError(NotificationError):
+class NotificationTransientError(NotificationError, TransientError):
     """Temporary/transient failure that SHOULD be retried (e.g. network blip, DB timeout)."""
 
 
-class NotificationPermanentError(NotificationError):
+class NotificationPermanentError(NotificationError, PermanentError):
     """Permanent/fatal failure that should NOT be retried (e.g. entity not found, invalid data)."""
 
 

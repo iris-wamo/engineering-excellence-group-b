@@ -1,64 +1,17 @@
-"""Unit tests for Celery Beat reminder tasks, Redis distributed locks, and beat schedule."""
+"""Unit tests for Celery Beat reminder tasks and the beat schedule.
+
+The lock itself is tested in packages/taskflow_shared/tests/test_locks.py.
+"""
 
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from app.core.celery_app import celery_app
-from app.tasks.locks import acquire_redis_lock, distributed_lock, release_redis_lock
 from app.tasks.reminder_tasks import (
     _process_due_task_reminders,
     send_due_task_reminders,
 )
-
-
-@pytest.mark.unit
-@pytest.mark.asyncio
-async def test_acquire_and_release_redis_lock_success() -> None:
-    mock_redis = AsyncMock()
-    mock_redis.set.return_value = True
-    mock_redis.eval.return_value = 1
-
-    token = await acquire_redis_lock(mock_redis, "test_key", timeout_seconds=60)
-    assert token is not None
-    mock_redis.set.assert_called_once_with("test_key", token, nx=True, ex=60)
-
-    released = await release_redis_lock(mock_redis, "test_key", token)
-    assert released is True
-    mock_redis.eval.assert_called_once()
-
-
-@pytest.mark.unit
-@pytest.mark.asyncio
-async def test_acquire_redis_lock_already_held() -> None:
-    mock_redis = AsyncMock()
-    mock_redis.set.return_value = None  # Lock already exists
-
-    token = await acquire_redis_lock(mock_redis, "test_key", timeout_seconds=60)
-    assert token is None
-
-
-@pytest.mark.unit
-@pytest.mark.asyncio
-async def test_release_redis_lock_mismatched_token() -> None:
-    mock_redis = AsyncMock()
-    mock_redis.eval.return_value = 0  # Token didn't match current lock holder
-
-    released = await release_redis_lock(mock_redis, "test_key", "wrong_token")
-    assert released is False
-
-
-@pytest.mark.unit
-@pytest.mark.asyncio
-async def test_distributed_lock_context_manager_acquires_and_releases() -> None:
-    mock_redis = AsyncMock()
-    mock_redis.set.return_value = True
-    mock_redis.eval.return_value = 1
-
-    async with distributed_lock("test_key", redis_client=mock_redis) as token:
-        assert token is not None
-
-    mock_redis.eval.assert_called_once()
 
 
 @pytest.mark.unit
@@ -71,6 +24,20 @@ async def test_process_due_task_reminders_skips_when_lock_held() -> None:
     assert result["status"] == "skipped"
     assert result["reason"] == "overlapping_run"
     assert result["reminders_created"] == 0
+    mock_redis.aclose.assert_not_called()  # the caller's client stays open
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_process_due_task_reminders_closes_the_client_it_creates() -> None:
+    mock_redis = AsyncMock()
+    mock_redis.set.return_value = None
+
+    with patch("app.tasks.reminder_tasks.create_redis_client", return_value=mock_redis):
+        result = await _process_due_task_reminders()
+
+    assert result["status"] == "skipped"
+    mock_redis.aclose.assert_awaited_once()
 
 
 @pytest.mark.unit

@@ -9,13 +9,15 @@ from celery import Task
 from sqlalchemy import select
 from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
+from taskflow_shared.concurrency import run_async
+from taskflow_shared.errors import PermanentError, TransientError
 
 from app.core.celery_app import celery_app
 from app.core.config import settings
 from app.models.notification import Notification
 from app.models.task import Task as TaskModel
 from app.models.user import User
-from app.tasks.db import get_worker_db, run_async
+from app.tasks.db import get_worker_db
 from app.tasks.exceptions import (
     InvalidAssignmentNotificationError,
     NotificationNotFoundError,
@@ -188,7 +190,7 @@ def _is_transient(exc: Exception) -> bool:
     DataError are DBAPIError subclasses too, but they fail the same way every time.
     ConnectionError and TimeoutError are covered by OSError.
     """
-    if isinstance(exc, NotificationTransientError | OperationalError | InterfaceError | OSError):
+    if isinstance(exc, TransientError | OperationalError | InterfaceError | OSError):
         return True
     return isinstance(exc, DBAPIError) and exc.connection_invalidated
 
@@ -221,7 +223,7 @@ def send_task_assignment_notification(
                 current_retry=self.request.retries,
             )
         )
-    except NotificationPermanentError as exc:
+    except PermanentError as exc:
         logger.error(
             "Permanent failure for notification %s: %s. Not retrying.",
             notification_id,

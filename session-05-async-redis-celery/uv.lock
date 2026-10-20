@@ -1393,6 +1393,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "redis" },
     { name = "starlette" },
 ]
 
@@ -1401,6 +1402,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.110.0" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pydantic-settings", specifier = ">=2.0" },
+    { name = "redis", specifier = ">=5.0" },
     { name = "starlette", specifier = ">=0.36.0" },
 ]
 

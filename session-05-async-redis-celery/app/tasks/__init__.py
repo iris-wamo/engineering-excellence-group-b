@@ -1,9 +1,5 @@
-"""Background task definitions and Celery workers."""
+"""Background task definitions and Celery workers.
 
-from app.tasks.notification_tasks import send_task_assignment_notification
-from app.tasks.reminder_tasks import send_due_task_reminders
-
-__all__ = [
-    "send_task_assignment_notification",
-    "send_due_task_reminders",
-]
+Task modules are registered through `include=[...]` in app.core.celery_app, so nothing is
+imported here: importing any app.tasks.* module must not build the Celery app eagerly.
+"""

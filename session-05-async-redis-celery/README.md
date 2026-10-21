@@ -238,6 +238,14 @@ All seed targets except `seed-clean` truncate every table before loading data.
 - `make docker-db-shell` - Opens a `psql` shell inside the Postgres container, as its `POSTGRES_USER` on `POSTGRES_DB`; no host `psql` needed.
 - `make redis-cli` - Open a `redis-cli` shell on the Dockerized Redis.
 
+#### Celery & Background Tasks
+These run on the host against the Redis in `.env`; with `make docker-up`, the `celery-worker`, `celery-beat` and `flower` containers already run them.
+- `make celery-worker` - Starts a Celery worker (assignment notifications, outbox sweep, due-task reminders).
+- `make celery-beat` - Starts Celery Beat, which queues the outbox sweep (every 300s) and the due-task reminder sweep (every 60s).
+- `make flower` - Starts Flower on `127.0.0.1:${FLOWER_PORT:-5555}`; it asks for a login when `FLOWER_BASIC_AUTH` is set.
+- `make celery-demo` - Scripted Celery jobs demo: success, duplicate delivery, retries, permanent failure, worker offline, A → B → A reassignment.
+- `make beat-demo` - Scripted Beat reminder demo: due-date filtering, overlap lock and dedup. It uses its own lock key and rolls back its rows, so it is safe next to the running `celery-beat`; it prints the Flower URL but does not check Flower.
+
 #### Task Events (Redis)
 - `make events-pubsub` - Run the Redis Pub/Sub task event consumer until Ctrl+C.
 - `make events-streams` - Run the Redis Streams task event consumer until Ctrl+C. Add `NAME=worker-1` to keep the same consumer name across restarts.

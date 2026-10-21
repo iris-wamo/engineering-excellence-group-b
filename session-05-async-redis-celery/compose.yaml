@@ -69,6 +69,8 @@ services:
       MONGO_URL: mongodb://mongo:27017
       MONGO_DB: ${MONGO_DB:-taskflow}
       REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
 
     ports:
       - "8000:8000"
@@ -80,6 +82,94 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    # Skip the image entrypoint's `alembic upgrade head`: only the api service migrates,
+    # so containers starting together never race on the same migration.
+    entrypoint: []
+    command: ["celery", "-A", "app.core.celery_app", "worker", "-l", "info"]
+
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-taskflow}:${POSTGRES_PASSWORD:-taskflow}@db:5432/${POSTGRES_DB:-taskflow}
+      MONGO_URL: mongodb://mongo:27017
+      MONGO_DB: ${MONGO_DB:-taskflow}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+    healthcheck:
+      disable: true
+
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    # Only the api service migrates (see celery-worker).
+    entrypoint: []
+    # The schedule file is container-local and not persisted. Both entries are fixed
+    # intervals, so after a restart Beat simply runs them on its first tick.
+    command: ["celery", "-A", "app.core.celery_app", "beat", "-l", "info", "--schedule", "/tmp/celerybeat-schedule"]
+
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-taskflow}:${POSTGRES_PASSWORD:-taskflow}@db:5432/${POSTGRES_DB:-taskflow}
+      MONGO_URL: mongodb://mongo:27017
+      MONGO_DB: ${MONGO_DB:-taskflow}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+    healthcheck:
+      disable: true
+
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    # Only the api service migrates (see celery-worker).
+    entrypoint: []
+    command: ["celery", "-A", "app.core.celery_app", "flower", "--port=${FLOWER_PORT:-5555}"]
+
+    # Flower can revoke tasks and shows task arguments: publish it on the host loopback
+    # only, behind basic auth. There is no default login: Compose refuses to start
+    # until FLOWER_BASIC_AUTH is set (see .env.example).
+    ports:
+      - "127.0.0.1:${FLOWER_PORT:-5555}:${FLOWER_PORT:-5555}"
+
+    # `-A app.core.celery_app` loads app Settings, which require the database and Mongo
+    # settings even though Flower only talks to Redis.
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-taskflow}:${POSTGRES_PASSWORD:-taskflow}@db:5432/${POSTGRES_DB:-taskflow}
+      MONGO_URL: mongodb://mongo:27017
+      MONGO_DB: ${MONGO_DB:-taskflow}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      FLOWER_BASIC_AUTH: ${FLOWER_BASIC_AUTH:?Set FLOWER_BASIC_AUTH=user:password in .env (see .env.example)}
+
+    depends_on:
+      redis:
+        condition: service_healthy
+
+    healthcheck:
+      disable: true
 
 volumes:
   pgdata:

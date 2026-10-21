@@ -1,15 +1,20 @@
 """Integration and unit tests for TaskImportService."""
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
+from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import NotFoundError
 from app.db.mongo import get_raw_task_imports_collection
+from app.events.schemas import TaskEventType
+from app.models.enums import ProjectRole
+from app.models.notification import Notification
 from app.models.task import Task
 from app.services.task_import_service import TaskImportService
+from tests.fixtures.events import stream_events
 from tests.fixtures.factories import MISSING_ID, DataFactory
 
 
@@ -419,3 +424,108 @@ async def test_idempotent_retry_on_uncommitted_pending_record_stays_pending(
     assert result.status == "PENDING"
     assert result.postgres_task_id is None
     assert result.import_id == str(doc_res.inserted_id)
+
+
+async def test_import_with_assignee_stages_notification_and_publishes_assigned_event(
+    db_session: AsyncSession,
+    factory: DataFactory,
+    redis_client: Redis,
+    broker_publish: MagicMock,
+) -> None:
+    """An imported task with an assignee is an assignment, like create_task with one."""
+    project = await factory.project()
+    importer = await factory.member(project, ProjectRole.owner)
+    assignee = await factory.member(project)
+    raw = {"title": "Imported With Assignee", "project_id": project.id, "assignee_id": assignee.id}
+
+    result = await TaskImportService.import_raw_task(db_session, raw, actor_id=importer.id)
+
+    assert result.status == "SUCCESS"
+    notification = await db_session.scalar(
+        select(Notification).where(Notification.task_id == result.postgres_task_id)
+    )
+    assert notification is not None
+    assert notification.status == "pending"
+    assert notification.recipient_id == assignee.id
+    assert notification.payload == {
+        "task_id": result.postgres_task_id,
+        "task_title": "Imported With Assignee",
+        "assigned_by_id": importer.id,
+    }
+    broker_publish.assert_called_once_with(kwargs={"notification_id": notification.id}, retry=False)
+    [event] = await stream_events(redis_client)
+    assert event.event_type is TaskEventType.assigned
+    assert event.task_id == result.postgres_task_id
+    assert event.actor_id == importer.id
+    assert event.data == {"previous_assignee_id": None, "new_assignee_id": assignee.id}
+
+
+async def test_import_without_assignee_has_no_notification_or_event(
+    db_session: AsyncSession,
+    factory: DataFactory,
+    redis_client: Redis,
+    broker_publish: MagicMock,
+) -> None:
+    project = await factory.project()
+
+    result = await TaskImportService.import_raw_task(
+        db_session, {"title": "Imported Unassigned", "project_id": project.id}
+    )
+
+    assert result.status == "SUCCESS"
+    broker_publish.assert_not_called()
+    assert await stream_events(redis_client) == []
+    assert (
+        await db_session.scalar(
+            select(Notification).where(Notification.task_id == result.postgres_task_id)
+        )
+        is None
+    )
+
+
+async def test_idempotent_import_retry_does_not_notify_again(
+    db_session: AsyncSession,
+    factory: DataFactory,
+    redis_client: Redis,
+    broker_publish: MagicMock,
+) -> None:
+    """A retried import returns the existing task without a second assignment."""
+    project = await factory.project()
+    assignee = await factory.member(project)
+    raw = {"title": "Retried Import", "project_id": project.id, "assignee_id": assignee.id}
+
+    first = await TaskImportService.import_raw_task(db_session, raw, idempotency_key="retry-1")
+    second = await TaskImportService.import_raw_task(db_session, raw, idempotency_key="retry-1")
+
+    assert second.postgres_task_id == first.postgres_task_id
+    notifications = (
+        await db_session.scalars(
+            select(Notification).where(Notification.task_id == first.postgres_task_id)
+        )
+    ).all()
+    assert len(notifications) == 1
+    assert broker_publish.call_count == 1
+    assert len(await stream_events(redis_client)) == 1
+
+
+async def test_import_is_recorded_success_before_the_assignment_is_announced(
+    db_session: AsyncSession, factory: DataFactory
+) -> None:
+    """A slow or failing broker/Redis publish must not hold the import in PENDING."""
+    project = await factory.project()
+    assignee = await factory.member(project)
+    raw = {"title": "Announce After Success", "project_id": project.id, "assignee_id": assignee.id}
+    statuses_seen: list[str] = []
+
+    async def record_import_status(task: Task, notification_id: int, actor_id: int | None) -> None:
+        doc = await get_raw_task_imports_collection().find_one({"postgres_task_id": task.id})
+        statuses_seen.append(doc["status"] if doc else "missing")
+
+    with patch(
+        "app.services.task_import_service.announce_new_task_assignee",
+        side_effect=record_import_status,
+    ):
+        result = await TaskImportService.import_raw_task(db_session, raw)
+
+    assert result.status == "SUCCESS"
+    assert statuses_seen == ["SUCCESS"]

@@ -8,8 +8,10 @@ dependencies = [
     "alembic==1.18.5",
     "asyncpg==0.31.0",
     "bcrypt==5.0.0",
+    "celery==5.6.3",
     "email-validator==2.3.0",
     "fastapi==0.139.0",
+    "flower==2.2.0",
     "greenlet==3.5.4",
     "pydantic-settings==2.14.2",
     "pyjwt==2.15.1",
@@ -68,3 +70,12 @@ disallow_untyped_defs = true
 check_untyped_defs = true
 no_implicit_optional = true
 strict_equality = true
+
+[[tool.mypy.overrides]]
+module = [
+    "celery.*",
+    "kombu.*",
+    "flower.*",
+]
+ignore_missing_imports = true
+

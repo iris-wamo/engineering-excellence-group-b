@@ -115,3 +115,13 @@ def test_exception_handlers_envelope() -> None:
     data_crash = crash_res.json()
     validated_crash = ErrorResponse.model_validate(data_crash)
     assert validated_crash.error.code == "INTERNAL_SERVER_ERROR"
+
+
+def test_retry_classification_errors_are_not_app_errors() -> None:
+    """Job errors never render as HTTP responses, so they stay outside AppError."""
+    from taskflow_shared.errors import AppError, PermanentError, TransientError
+
+    assert not issubclass(TransientError, AppError)
+    assert not issubclass(PermanentError, AppError)
+    assert not issubclass(TransientError, PermanentError)
+    assert not issubclass(PermanentError, TransientError)

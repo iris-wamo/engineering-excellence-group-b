@@ -22,7 +22,11 @@ from app.schemas.task_import import (
     TaskImportDetailResponse,
     TaskImportResponse,
 )
-from app.services.task_service import verify_project_membership
+from app.services.task_service import (
+    announce_new_task_assignee,
+    stage_assignment_notification,
+    verify_project_membership,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +41,7 @@ class TaskImportService:
         collection: AsyncCollection[dict[str, Any]] | None = None,
         idempotency_key: str | None = None,
         workspace_id: int = 1,
+        actor_id: int | None = None,
     ) -> TaskImportResponse:
         """Store incoming raw task payload first in MongoDB, then normalize to PostgreSQL."""
         col = collection if collection is not None else get_raw_task_imports_collection()
@@ -225,6 +230,16 @@ class TaskImportService:
                 workspace_id=project.workspace_id,
             )
             db.add(task)
+            # An imported task with an assignee is an assignment too: stage its outbox
+            # row in the same transaction, as TaskService.create_task does.
+            notification_id: int | None = None
+            if norm_payload.assignee_id is not None:
+                await db.flush()
+                notification = stage_assignment_notification(
+                    db, task, norm_payload.assignee_id, actor_id
+                )
+                await db.flush()
+                notification_id = notification.id
             await db.commit()
             await db.refresh(task)
             committed_task_id = task.id
@@ -299,6 +314,11 @@ class TaskImportService:
                 exc_info=True,
             )
 
+        # Stage 3: queue the notification and publish the event only after the import is
+        # recorded as SUCCESS, so a slow or failing broker/Redis never holds it in PENDING.
+        if notification_id is not None:
+            await announce_new_task_assignee(task, notification_id, actor_id)
+
         return TaskImportResponse(
             import_id=import_id_str,
             status=ImportStatus.SUCCESS,
@@ -314,6 +334,7 @@ class TaskImportService:
         items: list[dict[str, Any]],
         collection: AsyncCollection[dict[str, Any]] | None = None,
         workspace_id: int = 1,
+        actor_id: int | None = None,
     ) -> tuple[int, int, int, list[TaskImportResponse]]:
         """Ingest multiple raw task payloads into MongoDB and normalize independently."""
         results: list[TaskImportResponse] = []
@@ -326,6 +347,7 @@ class TaskImportService:
                 raw_payload=raw_payload,
                 collection=collection,
                 workspace_id=workspace_id,
+                actor_id=actor_id,
             )
             results.append(res)
             if res.status == ImportStatus.SUCCESS:

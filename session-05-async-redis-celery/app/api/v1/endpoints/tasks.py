@@ -72,11 +72,16 @@ async def import_raw_task(
     db: Annotated[AsyncSession, Depends(get_db)],
     workspace_id: CurrentWorkspaceId,
     response: Response,
+    current_user: OptionalCurrentUser,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> TaskImportResponse:
     """Ingest raw task data into MongoDB first, then attempt normalization into PostgreSQL."""
     res = await TaskImportService.import_raw_task(
-        db, payload.raw_payload, idempotency_key=idempotency_key, workspace_id=workspace_id
+        db,
+        payload.raw_payload,
+        idempotency_key=idempotency_key,
+        workspace_id=workspace_id,
+        actor_id=current_user.id if current_user is not None else None,
     )
     if res.status == ImportStatus.FAILED:
         response.status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
@@ -92,10 +97,14 @@ async def import_raw_tasks_batch(
     payload: TaskBatchImportRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
     workspace_id: CurrentWorkspaceId,
+    current_user: OptionalCurrentUser,
 ) -> TaskBatchImportResponse:
     """Ingest multiple raw task payloads in batch into MongoDB and normalize to PostgreSQL."""
     total, succeeded, failed, results = await TaskImportService.import_raw_tasks_batch(
-        db, [item.raw_payload for item in payload.items], workspace_id=workspace_id
+        db,
+        [item.raw_payload for item in payload.items],
+        workspace_id=workspace_id,
+        actor_id=current_user.id if current_user is not None else None,
     )
     return TaskBatchImportResponse(
         total=total,

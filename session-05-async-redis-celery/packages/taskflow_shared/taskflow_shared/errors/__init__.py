@@ -10,6 +10,7 @@ from taskflow_shared.errors.exceptions import (
     ValidationAppError,
 )
 from taskflow_shared.errors.handlers import register_exception_handlers
+from taskflow_shared.errors.retry import PermanentError, TransientError
 from taskflow_shared.errors.schemas import ErrorBody, ErrorDetail, ErrorResponse
 
 __all__ = [
@@ -24,4 +25,6 @@ __all__ = [
     "ErrorBody",
     "ErrorResponse",
     "register_exception_handlers",
+    "TransientError",
+    "PermanentError",
 ]

@@ -6,11 +6,13 @@ A shared backend foundation package for TaskFlow applications and services, prov
 
 `taskflow_shared` encapsulates common patterns used across TaskFlow services:
 - **`config`**: Base application configuration abstractions (`BaseAppSettings`).
-- **`errors`**: Domain and application error hierarchy (`AppError`, `NotFoundError`, `ConflictError`, `ValidationAppError`, `UnauthorizedError`, `ForbiddenError`, `DomainError`) and FastAPI exception handler registration.
+- **`errors`**: Domain and application error hierarchy (`AppError`, `NotFoundError`, `ConflictError`, `ValidationAppError`, `UnauthorizedError`, `ForbiddenError`, `DomainError`), FastAPI exception handler registration, and retry classification for background jobs (`TransientError`, `PermanentError`).
 - **`pagination`**: Standard request parameters (`PaginationParams`) and generic response envelopes (`PaginatedResponse[T]`).
 - **`logging`**: ContextVar-based request ID tracing (`get_request_id`, `set_request_id`), FastAPI middleware (`RequestIdMiddleware`), and logger filters (`RequestIdFilter`).
 - **`contracts`**: Base Pydantic models (`BaseSchema`, `TimestampedSchema`) and HTTP header constants (`X-Request-ID`, `X-Workspace-ID`).
 - **`enums`**: Cross-domain shared enums (`Environment`, `SortOrder`).
+- **`locks`**: Redis distributed lock (`distributed_lock`, `acquire_redis_lock`, `release_redis_lock`, `renew_redis_lock`): `SET NX EX`, token-checked Lua release, and renewal while held.
+- **`concurrency`**: `run_async` runs a coroutine from synchronous code (such as a Celery task), also when an event loop is already running.
 
 ---
 
@@ -116,6 +118,32 @@ The middleware:
 1. Captures `X-Request-ID` from inbound request headers (or generates a new UUID4).
 2. Sets it in the execution context via Python's `contextvars`.
 3. Injects `X-Request-ID` into the outbound HTTP response headers.
+
+### 4. Distributed Lock
+```python
+from redis.asyncio import Redis
+from taskflow_shared.locks import distributed_lock
+
+async def nightly_job(redis: Redis) -> None:
+    async with distributed_lock(redis, "locks:nightly-job", timeout_seconds=300) as token:
+        if token is None:
+            return  # another run holds the lock
+        ...  # the lock is renewed every timeout_seconds / 3 until the block exits
+```
+The caller owns the Redis client. The lock is released only by the holder whose token
+still matches, so an expired holder can never delete the next holder's lock.
+
+### 5. Background Job Helpers
+```python
+from taskflow_shared.concurrency import run_async
+from taskflow_shared.errors import PermanentError, TransientError
+
+class MailerDown(TransientError): ...       # retry with backoff
+class RecipientMissing(PermanentError): ...  # fail at once
+
+def celery_task_body(job_id: int) -> dict:
+    return run_async(process(job_id))  # sync Celery task, async logic
+```
 
 ---
 

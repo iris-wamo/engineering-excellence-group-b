@@ -20,7 +20,7 @@ When notifications are delivered synchronously within an API endpoint:
 
 ### The Solution: Asynchronous Background Offloading
 TaskFlow decouples task state mutations from notification delivery:
-1. The API transaction validates membership, updates the task row, records assignment history, and writes a `pending` notification row in PostgreSQL. Creating a task with an `assignee_id` (`TaskService.create_task`) or importing one (`TaskImportService.import_raw_task`, single or batch) counts as an assignment and stages the same row; after commit both queue the job and publish the `task.assigned` event. An idempotent import retry returns the existing task and notifies nobody again. On reassignment or unassignment, the replaced assignee's undelivered `pending` row is set to `cancelled` in the same transaction.
+1. The API transaction validates membership, updates the task row, records assignment history, and writes a `pending` notification row in PostgreSQL. Creating a task with an `assignee_id` (`TaskService.create_task`) or importing one (`TaskImportService.import_raw_task`, single or batch) counts as an assignment and stages the same row; after commit both queue the job and publish the `task.assigned` event (the import does so only after recording the import as `SUCCESS` in MongoDB, so a slow broker never leaves it `PENDING`). An idempotent import retry returns the existing task and notifies nobody again. On reassignment or unassignment, the replaced assignee's undelivered `pending` row is set to `cancelled` in the same transaction.
 2. The transaction commits to PostgreSQL.
 3. Immediately **after commit**, the API publishes a background job carrying only the row's `notification_id` (`enqueue_assignment_notification`, which calls `apply_async(..., retry=False)`). Kombu publishes synchronously, so the service runs it in a thread via `asyncio.to_thread` and the event loop keeps serving other requests.
 4. The background Celery worker picks up the job from Redis, locks the task and then that notification row, delivers it, and transitions it from `pending` to `sent`.
@@ -73,7 +73,19 @@ Celery workers operate asynchronously with their own event loops across worker p
 TaskFlow provides `get_worker_db()`:
 - Uses SQLAlchemy `AsyncSession` with `NullPool` (no pooled connection reuse across processes).
 - Explicitly disposes the async engine upon exit.
-- Provides `run_async(...)` to execute asynchronous coroutines synchronously within Celery worker threads while handling pre-existing event loops safely via thread pools.
+
+`run_async(...)` (in `taskflow_shared.concurrency`) runs an async coroutine from a synchronous Celery task, and falls back to a separate thread when an event loop is already running (as under pytest).
+
+### Request ID Tracing Into Jobs (`app/core/celery_app.py`)
+The API's `RequestIdMiddleware` (shared package) sets an `X-Request-ID` for each request. Celery signals carry it into the job:
+- `before_task_publish` copies the current request id into the message headers (`request_id`). The publish runs through `asyncio.to_thread`, which keeps the request's context.
+- `task_prerun` makes it the current request id while the job runs; `task_postrun` clears it.
+- `after_setup_logger` / `after_setup_task_logger` attach the shared `RequestIdFilter` to the worker and Beat log handlers, and `worker_log_format` / `worker_task_log_format` print it.
+
+A worker log line for a job queued by an API call carries that call's id, so it can be matched to the API log and the `X-Request-ID` response header. Scheduled jobs show `-`:
+```
+[2026-10-20 16:50:05,940: ERROR/MainProcess] [demo-req-42] Permanent failure for notification 999999: ...
+```
 
 ---
 
@@ -106,7 +118,7 @@ Not all errors should be retried. Blindly retrying validation errors or non-exis
 Transient errors represent temporary infrastructure blips that are expected to self-heal:
 - Database connectivity loss (`OperationalError`, `InterfaceError`, or any `DBAPIError` with `connection_invalidated=True`).
 - Socket and network failures (`OSError`, which covers `ConnectionError` and `TimeoutError`).
-- Explicit transient failures (`NotificationTransientError`).
+- Explicit transient failures: any `TransientError` from `taskflow_shared.errors`, such as `NotificationTransientError`.
 
 Other `DBAPIError` subclasses (`IntegrityError`, `ProgrammingError`, `DataError`) fail the same way on every attempt, so they are **not** retried.
 
@@ -124,7 +136,7 @@ Permanent errors represent deterministic, invariant domain failures:
 - Target task does not exist (`TaskNotFoundError`).
 - Target recipient user does not exist (`RecipientNotFoundError`).
 - Task assignee does not match notification recipient (`InvalidAssignmentNotificationError`).
-- Base permanent failure (`NotificationPermanentError`).
+- Base permanent failure (`NotificationPermanentError`). The worker catches the shared `PermanentError` base, so any job error that subclasses it fails at once.
 
 **Failure Policy:**
 - **Retries**: 0 (aborted immediately, `self.retry()` is never called).

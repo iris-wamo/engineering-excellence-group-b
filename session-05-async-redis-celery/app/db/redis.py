@@ -37,7 +37,11 @@ def _create_request_path_client() -> Redis:
     )
 
 
-_redis_clients: LoopClients[Redis] = LoopClients(_create_request_path_client)
+async def _close_redis(client: Redis) -> None:
+    await client.aclose()
+
+
+_redis_clients: LoopClients[Redis] = LoopClients(_create_request_path_client, _close_redis)
 
 
 def get_redis_client() -> Redis:
@@ -47,6 +51,4 @@ def get_redis_client() -> Redis:
 
 async def close_redis_client() -> None:
     """Close the Redis client for the current event loop if open."""
-    client = _redis_clients.pop(asyncio.get_running_loop())
-    if client is not None:
-        await client.aclose()
+    await _redis_clients.close(asyncio.get_running_loop())

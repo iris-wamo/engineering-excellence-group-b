@@ -15,5 +15,5 @@ celery-demo: ## Run end-to-end Celery jobs demonstration (success, retry, idempo
 	uv run python -m scripts.demo_celery_jobs
 
 .PHONY: beat-demo
-beat-demo: ## Run end-to-end Celery Beat due reminders, overlap prevention & Flower demo
+beat-demo: ## Run the Celery Beat reminder demo (due-date filter, overlap lock, dedup; prints the Flower URL)
 	uv run python -m scripts.demo_celery_beat

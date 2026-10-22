@@ -21,7 +21,13 @@ def _create_mongo_client() -> AsyncMongoClient[dict[str, Any]]:
     )
 
 
-_mongo_clients: LoopClients[AsyncMongoClient[dict[str, Any]]] = LoopClients(_create_mongo_client)
+async def _close_mongo(client: AsyncMongoClient[dict[str, Any]]) -> None:
+    await client.close()
+
+
+_mongo_clients: LoopClients[AsyncMongoClient[dict[str, Any]]] = LoopClients(
+    _create_mongo_client, _close_mongo
+)
 _default_client: AsyncMongoClient[dict[str, Any]] | None = None
 
 
@@ -66,13 +72,7 @@ async def init_mongo_indexes(database_name: str | None = None) -> None:
 
 async def close_mongo_client() -> None:
     """Close the AsyncMongoClient connection for the current loop if open."""
-    try:
-        loop = asyncio.get_running_loop()
-        client = _mongo_clients.pop(loop)
-        if client is not None:
-            await client.close()
-    except RuntimeError:
-        pass
+    await _mongo_clients.close(asyncio.get_running_loop())
 
     global _default_client
     if _default_client is not None:

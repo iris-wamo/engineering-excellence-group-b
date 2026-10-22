@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.core.config import settings
 from app.db.base import Base
-from app.db.mongo import get_raw_task_imports_collection
+from app.db.mongo import close_mongo_client, get_raw_task_imports_collection
 
 _base_url, _, _db_name = str(settings.database_url).rpartition("/")
 TEST_DATABASE_URL = f"{_base_url}/{_db_name}_test"
@@ -78,6 +78,17 @@ def test_mongo_database() -> Generator[str, None]:
     yield TEST_MONGO_DB
     sync_client.drop_database(TEST_MONGO_DB)
     sync_client.close()
+
+
+@pytest.fixture(autouse=True)
+async def close_app_mongo_client() -> AsyncGenerator[None, None]:
+    """Close the app's shared Mongo client after every test.
+
+    It is bound to the test's event loop, which closes when the test ends; a client left
+    open there keeps its sockets until garbage collection. Opens no connection itself.
+    """
+    yield
+    await close_mongo_client()
 
 
 @asynccontextmanager

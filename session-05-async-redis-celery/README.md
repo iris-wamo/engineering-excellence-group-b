@@ -5,8 +5,8 @@ from a basic API into an asynchronous backend workflow. It focuses on async prog
 (non-blocking endpoints, concurrent external calls, timeouts), Redis caching and cache invalidation
 strategies, Redis Pub/Sub vs. Redis Streams for event channeling, Celery background jobs with retries
 and worker failure handling, Celery Beat periodic scheduling, and Flower monitoring for worker
-observability. The initial scope is intentionally light; detailed implementation and documentation
-will land through topic-specific PRs.
+observability. Design notes for each topic are in [`docs/session-05/`](docs/session-05/) and
+reproducible walkthroughs in [`demos/session-05/`](demos/session-05/).
 
 The database design this is built from is documented in
 [`docs/session-03/db/schema-design.md`](docs/session-03/db/schema-design.md), with the diagram in
@@ -16,6 +16,7 @@ The database design this is built from is documented in
 ## Table of contents
 
 - [What you need](#what-you-need)
+- [Quick start with Docker](#quick-start-with-docker)
 - [Step 1 — Install uv](#step-1--install-uv)
 - [Step 2 — Install PostgreSQL](#step-2--install-postgresql)
   - [macOS](#macos)
@@ -28,6 +29,7 @@ The database design this is built from is documented in
 - [Pre-commit hooks](#pre-commit-hooks)
 - [Project layout](#project-layout)
 - [Working with migrations](#working-with-migrations)
+- [Seeding & Performance Test Data](#seeding--performance-test-data)
 - [Inspecting the database](#inspecting-the-database)
 - [Using pgAdmin](#using-pgadmin)
 
@@ -38,10 +40,42 @@ The database design this is built from is documented in
 | Tool | Why | Notes |
 |------|-----|-------|
 | **uv** | Runs Python and installs dependencies | Also installs the right Python for you — you do **not** need to install Python separately |
-| **PostgreSQL** | The database | Any modern version works |
+| **Docker** (with Compose) | Runs the whole stack: PostgreSQL, MongoDB, Redis, API, Celery worker, Celery Beat, Flower | Recommended; see [Quick start with Docker](#quick-start-with-docker) |
+| **PostgreSQL** | The main database | Only if you run it natively instead of in Docker (Steps 2–3) |
+| **MongoDB** | Raw task imports | Any modern version; or `docker compose up -d mongo` |
+| **Redis** | Cache, task events, Celery broker and results, the reminder lock | Any modern version; or `docker compose up -d redis` |
 
-The project targets **Python 3.12+**, but `uv` downloads and manages that automatically,
-so the only two things you install by hand are uv and PostgreSQL.
+The project targets **Python 3.12+**, but `uv` downloads and manages that automatically.
+With Docker, uv and Docker are the only things you install by hand.
+
+---
+
+## Quick start with Docker
+
+From the `session-05-async-redis-celery/` directory:
+
+```bash
+# 1. Install dependencies on the host (for tests, seeding and scripts) and create .env
+make install
+
+# 2. Pick your own Flower login in .env (the template has a placeholder). Compose refuses
+#    to run any command while it is missing:  FLOWER_BASIC_AUTH=<user>:<password>
+
+# 3. Build and start every service; the api container runs the migrations on start
+make docker-build
+make docker-up
+
+# 4. Load demo data and create the test database used by `make test`
+make seed
+docker compose exec db sh -c 'createdb -U "$POSTGRES_USER" "${POSTGRES_DB}_test"'
+```
+
+- API docs: <http://localhost:8000/docs>
+- Flower: <http://127.0.0.1:5555> (or `FLOWER_PORT`), log in with `FLOWER_BASIC_AUTH`
+- Logs: `make docker-logs` (API) or `make docker-logs s=celery-worker`
+
+The `.env.example` defaults point host commands at the Docker ports: PostgreSQL on **5433**,
+MongoDB on 27017 and Redis on 6379. To run without Docker, follow Steps 1–4 below.
 
 ---
 
@@ -173,9 +207,13 @@ uv run alembic upgrade head   # or use make migrate
 uv run uvicorn app.main:app --reload  # or use make run
 ```
 
-The defaults in `.env.example` already match the role and database from Step 3, so you
-normally don't need to edit `.env`. Only change `DATABASE_URL` if your Postgres uses a
-different port, user, or password.
+The `.env.example` defaults match the role and database from Step 3, but `DATABASE_URL`
+points at port **5433**, the Docker Compose port. For a native Postgres, change it to
+`localhost:5432`. Also check that `MONGO_URL` and `REDIS_URL` point at your MongoDB and Redis
+(or start just those two with `docker compose up -d mongo redis`).
+
+To run the background jobs natively, start `make celery-worker` and `make celery-beat` in
+separate terminals (and `make flower` to watch them).
 
 
 ---
@@ -197,15 +235,21 @@ make help  # or simply `make`
 - `make run` - Starts the FastAPI development server with reload.
 
 #### Database & Migrations
-- `make db-shell` - Opens an interactive `psql` database shell on the local Postgres.
+- `make db-shell` - Opens an interactive `psql` shell on the database in `DATABASE_URL` (`.env`).
 - `make migrate` - Runs database migrations (upgrades to head).
 - `make migrate-create m="message"` - Generates a new database migration revision.
-- `make migrate-check` - Verifies database migrations match the current models.
+- `make migrate-check` - Fails if the models and the migrations differ (`alembic check`).
 - `make migrate-current` - Shows current database migration revision.
 - `make migrate-history` - Lists all database migration history.
-- `make seed` - Seeds the database with default local demo data.
-- `make seed-large` - Seeds the database with 10,000 tasks for query performance benchmarking.
-- `make db-reset` - Resets database tables and re-seeds cleanly.
+
+#### Data Seeding
+All seed targets except `seed-clean` truncate every table before loading data.
+- `make seed` - Truncates all tables and loads the default demo dataset (~200 tasks).
+- `make seed-large` - Truncates all tables and loads 10,000 tasks for query performance benchmarking.
+- `make seed-huge` - Truncates all tables and loads 50,000 tasks for heavy stress testing.
+- `make seed-clean` - Truncates all tables and leaves an empty schema (0 rows).
+- `make seed-reset` / `make db-reset` - Aliases for `make seed`.
+- `make db-clean` - Alias for `make seed-clean`.
 
 
 #### Code Quality & Linting
@@ -217,18 +261,39 @@ make help  # or simply `make`
 - `make hooks-run` - Runs all pre-commit hooks against every file.
 
 #### Testing & Coverage
-- `make test` - Runs all unit tests.
-- `make test-cov` - Runs unit tests with code coverage report.
+- `make test` - Runs the full test suite (unit, integration, auth).
+- `make test-unit` - Runs unit tests only; no database needed.
+- `make test-integration` - Runs integration tests; needs PostgreSQL, MongoDB and Redis.
+- `make test-auth` - Runs auth tests; needs PostgreSQL and MongoDB.
+- `make test-cov` - Runs the full test suite with a coverage report.
 
 #### Docker & Containerization
-- `make docker-build` - Build Docker images.
-- `make docker-up` - Start application and database.
-- `make docker-down` - Stop application and database.
-- `make docker-logs` - Show application logs.
+- `make docker-build` - Builds the Docker images for every Compose service with a `build` section.
+- `make docker-up` - Starts every Compose service in the background.
+- `make docker-down` - Stops and removes every Compose container; named volumes (database data) are kept.
+- `make docker-logs` - Follows the `api` logs. Add `s=<service>` for another service, e.g. `make docker-logs s=redis`.
 - `make docker-shell` - Open shell inside API container.
-- `make docker-db-shell` - Open a psql shell on the Dockerized Postgres.
+- `make docker-db-shell` - Opens a `psql` shell inside the Postgres container, as its `POSTGRES_USER` on `POSTGRES_DB`; no host `psql` needed.
+- `make redis-cli` - Open a `redis-cli` shell on the Dockerized Redis.
+
+#### Celery & Background Tasks
+These run on the host against the Redis in `.env`; with `make docker-up`, the `celery-worker`, `celery-beat` and `flower` containers already run them.
+- `make celery-worker` - Starts a Celery worker (assignment notifications, outbox sweep, due-task reminders).
+- `make celery-beat` - Starts Celery Beat, which queues the outbox sweep (every 300s) and the due-task reminder sweep (every 60s).
+- `make flower` - Starts Flower on `127.0.0.1:${FLOWER_PORT:-5555}`; it asks for a login when `FLOWER_BASIC_AUTH` is set.
+- `make celery-demo` - Scripted Celery jobs demo: success, duplicate delivery, retries, permanent failure, worker offline, A → B → A reassignment.
+- `make beat-demo` - Scripted Beat reminder demo: due-date filtering, overlap lock and dedup. It uses its own lock key and rolls back its rows, so it is safe next to the running `celery-beat`; it prints the Flower URL but does not check Flower.
+
+#### Task Events (Redis)
+- `make events-pubsub` - Run the Redis Pub/Sub task event consumer until Ctrl+C.
+- `make events-streams` - Run the Redis Streams task event consumer until Ctrl+C. Add `NAME=worker-1` to keep the same consumer name across restarts.
+- `make events-demo` - Scripted Pub/Sub vs Streams comparison: offline consumer, duplicate events, crash before acknowledgement.
+
+Task status changes and assignments publish events to both transports. See
+[`docs/session-05/redis-pubsub-vs-streams.md`](docs/session-05/redis-pubsub-vs-streams.md).
 
 > **Note on host commands with Docker**: When the stack is running via `make docker-up`, PostgreSQL is mapped to host port **5433** (via `compose.override.yaml`). Ensure `DATABASE_URL` in `.env` uses `localhost:5433` (e.g. `postgresql+asyncpg://taskflow:taskflow@localhost:5433/taskflow`) so that host make commands (`make seed`, `make migrate`, `make test`) connect to the container database.
+Redis is mapped to host port **6379**, matching `REDIS_URL` in `.env.example`; tests use logical database 15 on the same server.
 
 
 
@@ -240,11 +305,16 @@ make help  # or simply `make`
 uv run pytest                 # or use make test
 ```
 
-Tests run against the real `taskflow_test` database created in Step 3 (the test DB name is
-derived from `DATABASE_URL` by appending `_test`) — not SQLite — so the schema and
-constraints (enums, unique indexes, etc.) are exercised the same way they are in production.
-Each test creates the tables it needs and drops them afterward, so the database is empty
-between runs.
+Unit tests need nothing running (`make test-unit`). Integration and auth tests run against
+real services, not SQLite or fakes, so the schema and constraints (enums, unique indexes,
+etc.) are exercised the same way they are in production:
+
+- **PostgreSQL**: the `DATABASE_URL` database name plus `_test` (e.g. `taskflow_test`, created
+  in Step 3 or in the Docker quick start). The schema is created once per run; each test runs
+  inside a transaction that is rolled back, so tests never see each other's rows.
+- **MongoDB**: the `MONGO_DB` name plus `_test`.
+- **Redis**: logical database 15 on the `REDIS_URL` server, emptied around each test that uses
+  it, so the app's own data is never touched.
 
 ---
 
@@ -257,7 +327,7 @@ The hooks are configured in [`.pre-commit-config.yaml`](.pre-commit-config.yaml)
 |------|--------------|
 | `trailing-whitespace`, `check-yaml`, `check-toml`, `check-json`, `check-merge-conflict` | Basic file hygiene |
 | `ruff-check` / `ruff-format` | Lints and formats Python code |
-| `mypy` | Static type checking of `app` |
+| `mypy` | Static type checking of the whole project (`mypy .`) |
 | `pytest` | Runs the test suite |
 
 `pre-commit` is installed with the dev dependencies (`make install`).
@@ -286,12 +356,16 @@ app/
   services/            Business logic service layer
   repositories/        Database queries and data access layer
   workflows/           Domain workflow and transition engines
+  events/              Task events: payload, Redis publisher, Pub/Sub and Streams consumers
   models/              SQLAlchemy ORM models
   schemas/             Pydantic validation schemas
   core/                App settings and exception handlers
-  db/                  Database engine and session management
+  db/                  Database engine, Mongo, and Redis client management
+  tasks/               Celery jobs: assignment notifications, outbox sweep, due-task reminders
 packages/
-  taskflow_shared/     Reusable shared package (errors, pagination, logging, enums)
+  taskflow_shared/     Reusable shared package (errors, pagination, logging, enums, Redis lock, run_async)
+scripts/               Seed data, event consumers, and the scripted demos behind the make targets
+makefiles/             Make targets, grouped by section and included by the Makefile
 alembic/
   env.py               Alembic migration configuration
   versions/            Migration files
@@ -366,6 +440,8 @@ The project includes a dedicated, high-performance database seeding script (`scr
 ### Quick Commands
 
 ```bash
+# Every command below except db-clean truncates all tables first.
+
 # 1. Seed database with default local demo data (~200 tasks)
 make seed
 
@@ -378,7 +454,7 @@ make seed-huge
 # 4. Wipe / truncate all database tables leaving an empty schema (0 rows)
 make db-clean
 
-# 5. Perform a clean table truncation and re-seed
+# 5. Same as make seed (alias)
 make db-reset
 ```
 
@@ -416,8 +492,11 @@ task                 | 200
 ## Inspecting the database
 
 ```bash
-# Open an interactive psql shell (\q to quit)
-psql "postgresql://taskflow:taskflow@localhost:5432/taskflow"  # or use make db-shell
+# Open an interactive psql shell on the database in DATABASE_URL (\q to quit)
+make db-shell
+
+# Or, with the Docker stack running, inside the Postgres container
+make docker-db-shell
 ```
 
 Useful commands once inside psql:
@@ -447,7 +526,7 @@ grab it from [pgadmin.org](https://www.pgadmin.org/).
    | Field | Value |
    |-------|-------|
    | Host name/address | `localhost` |
-   | Port | `5432` |
+   | Port | `5432` (`5433` for the Docker stack) |
    | Maintenance database | `taskflow` |
    | Username | `taskflow` |
    | Password | `taskflow` |

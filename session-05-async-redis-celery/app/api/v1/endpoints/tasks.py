@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Header, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from taskflow_shared.enums import ImportStatus
 
+from app.auth.dependencies import OptionalCurrentUser
 from app.auth.permissions import (
     Permission,
     require_task_assignee,
@@ -41,9 +42,15 @@ async def create_task(
     payload: TaskCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
     workspace_id: CurrentWorkspaceId,
+    current_user: OptionalCurrentUser,
 ) -> TaskResponse:
     """Create a new task within the active workspace."""
-    return await TaskService.create_task(db, payload, workspace_id=workspace_id)
+    return await TaskService.create_task(
+        db,
+        payload,
+        workspace_id=workspace_id,
+        actor_id=current_user.id if current_user is not None else None,
+    )
 
 
 @router.post(
@@ -66,11 +73,16 @@ async def import_raw_task(
     db: Annotated[AsyncSession, Depends(get_db)],
     workspace_id: CurrentWorkspaceId,
     response: Response,
+    current_user: OptionalCurrentUser,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> TaskImportResponse:
     """Ingest raw task data into MongoDB first, then attempt normalization into PostgreSQL."""
     res = await TaskImportService.import_raw_task(
-        db, payload.raw_payload, idempotency_key=idempotency_key, workspace_id=workspace_id
+        db,
+        payload.raw_payload,
+        idempotency_key=idempotency_key,
+        workspace_id=workspace_id,
+        actor_id=current_user.id if current_user is not None else None,
     )
     if res.status == ImportStatus.FAILED:
         response.status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
@@ -86,10 +98,14 @@ async def import_raw_tasks_batch(
     payload: TaskBatchImportRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
     workspace_id: CurrentWorkspaceId,
+    current_user: OptionalCurrentUser,
 ) -> TaskBatchImportResponse:
     """Ingest multiple raw task payloads in batch into MongoDB and normalize to PostgreSQL."""
     total, succeeded, failed, results = await TaskImportService.import_raw_tasks_batch(
-        db, [item.raw_payload for item in payload.items], workspace_id=workspace_id
+        db,
+        [item.raw_payload for item in payload.items],
+        workspace_id=workspace_id,
+        actor_id=current_user.id if current_user is not None else None,
     )
     return TaskBatchImportResponse(
         total=total,

@@ -1,13 +1,14 @@
 [project]
 name = "taskflow_shared"
 version = "0.1.0"
-description = "TaskFlow shared backend package (config, errors, pagination, logging, contracts, enums)"
+description = "TaskFlow shared backend package (config, errors, pagination, logging, contracts, enums, locks, concurrency)"
 requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
     "fastapi>=0.110.0",
     "starlette>=0.36.0",
+    "redis>=5.0",
 ]
 
 [build-system]

@@ -1,13 +1,15 @@
 """Suite-wide fixtures.
 
-Database fixtures live in tests/fixtures/database.py and are registered as a plugin
-below. Data factories are in tests/fixtures/factories.py and token helpers in
-tests/fixtures/auth.py. Test modules import helpers and types from tests.fixtures,
+Database fixtures live in tests/fixtures/database.py and Redis fixtures in
+tests/fixtures/redis.py; both are registered as plugins below. Data factories are in
+tests/fixtures/factories.py, token helpers in tests/fixtures/auth.py, and task event
+helpers in tests/fixtures/events.py. Test modules import helpers and types from tests.fixtures,
 never from this file.
 """
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Iterator
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 # On macOS, the default per-process file descriptor limit in Terminal is 256.
 # Running large integration suites exhausts this limit, causing OSError 24 (Too many open files)
@@ -40,7 +42,7 @@ from tests.fixtures.auth import (
 )
 from tests.fixtures.factories import DEFAULT_WORKSPACE_ID, DataFactory
 
-pytest_plugins = ["tests.fixtures.database"]
+pytest_plugins = ["tests.fixtures.database", "tests.fixtures.redis"]
 
 # Every test is marked after the top-level folder it lives in (tests/unit, tests/integration,
 # tests/auth), so `pytest -m unit` runs only the tests that need no database. Tests outside
@@ -58,6 +60,20 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             continue
         folder = path.relative_to(tests_root).parts[0]
         item.add_marker(folder if folder in _FOLDER_MARKERS else "integration")
+
+
+@pytest.fixture(autouse=True)
+def broker_publish() -> Iterator[MagicMock]:
+    """Stub the Celery publish for every test so none reaches a real broker.
+
+    Without this, every assignment made in a test would queue a job carrying a test-DB
+    notification id in the dev Redis, where a dev worker would apply it to unrelated rows.
+    Tests that assert on dispatch can take this fixture or patch apply_async themselves.
+    """
+    with patch(
+        "app.tasks.notification_tasks.send_task_assignment_notification.apply_async"
+    ) as mock_apply_async:
+        yield mock_apply_async
 
 
 @pytest.fixture()

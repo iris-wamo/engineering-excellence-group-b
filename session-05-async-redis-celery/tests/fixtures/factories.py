@@ -15,6 +15,7 @@ the test body itself whenever the behavior under test is the API.
 """
 
 from collections.abc import Iterable
+from datetime import date
 from itertools import count
 from typing import TypeVar
 
@@ -137,6 +138,7 @@ class DataFactory:
         status: TaskStatus = TaskStatus.todo,
         priority: TaskPriority = TaskPriority.medium,
         description: str | None = None,
+        due_date: date | None = None,
     ) -> Task:
         """A task in the project, in the project's workspace.
 
@@ -154,6 +156,7 @@ class DataFactory:
                 assignee_id=assignee.id if isinstance(assignee, User) else assignee,
                 status=status,
                 priority=priority,
+                due_date=due_date,
             )
         )
 

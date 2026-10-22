@@ -1,6 +1,9 @@
 """Data access layer for the Task model."""
 
-from sqlalchemy import func, select
+from datetime import date
+from typing import Any
+
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.enums import TaskPriority, TaskStatus
@@ -101,3 +104,53 @@ class TaskRepository:
         ).all()
 
         return list(tasks), total
+
+    @staticmethod
+    async def get_summary_metrics(
+        db: AsyncSession,
+        workspace_id: int,
+        today: date | None = None,
+    ) -> dict[str, Any]:
+        """Aggregate task metrics for a workspace in a single SQL query.
+
+        Counts are computed via SQL CASE conditional aggregation for efficiency:
+        - counts_by_status: count for each status in TaskStatus
+        - overdue_count: tasks with due_date < current_day and status != done
+        - assigned_count: tasks with non-null assignee_id
+        - total_count: all tasks in the workspace
+        """
+        current_day = today or date.today()
+
+        stmt = select(
+            func.count(case((Task.status == TaskStatus.todo, 1))).label("todo_count"),
+            func.count(case((Task.status == TaskStatus.in_progress, 1))).label("in_progress_count"),
+            func.count(case((Task.status == TaskStatus.review, 1))).label("review_count"),
+            func.count(case((Task.status == TaskStatus.done, 1))).label("done_count"),
+            func.count(
+                case(
+                    (
+                        (Task.due_date.is_not(None))
+                        & (Task.due_date < current_day)
+                        & (Task.status != TaskStatus.done),
+                        1,
+                    )
+                )
+            ).label("overdue_count"),
+            func.count(case((Task.assignee_id.is_not(None), 1))).label("assigned_count"),
+            func.count(Task.id).label("total_count"),
+        ).where(Task.workspace_id == workspace_id)
+
+        result = await db.execute(stmt)
+        row = result.one()
+
+        return {
+            "counts_by_status": {
+                TaskStatus.todo.value: row.todo_count or 0,
+                TaskStatus.in_progress.value: row.in_progress_count or 0,
+                TaskStatus.review.value: row.review_count or 0,
+                TaskStatus.done.value: row.done_count or 0,
+            },
+            "overdue_count": row.overdue_count or 0,
+            "assigned_count": row.assigned_count or 0,
+            "total_count": row.total_count or 0,
+        }

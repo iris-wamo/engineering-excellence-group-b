@@ -130,3 +130,65 @@ class TaskResponse(BaseModel):
 
 class TaskListResponse(PaginatedResponse[TaskResponse]):
     """Schema for paginated task list response."""
+
+
+class ExternalServiceResult(BaseModel):
+    """Schema for simulated external service call result."""
+
+    service: str = Field(
+        default="workload_service",
+        description="Name of the simulated external service.",
+        examples=["workload_service"],
+    )
+    status: str = Field(
+        default="healthy",
+        description="Status of the external service call.",
+        examples=["healthy"],
+    )
+    latency_ms: float = Field(
+        ...,
+        ge=0.0,
+        description="Observed latency of the external call in milliseconds.",
+        examples=[204.5],
+    )
+    mode: str = Field(
+        ...,
+        description="Execution mode: 'async' (non-blocking) or 'blocking'.",
+        examples=["async"],
+    )
+
+
+class TaskSummaryResponse(BaseModel):
+    """Schema for workspace task summary response."""
+
+    workspace_id: int = Field(
+        ...,
+        description="Active workspace ID.",
+        examples=[1],
+    )
+    counts_by_status: dict[str, int] = Field(
+        ...,
+        description="Task counts grouped by status (todo, in_progress, review, done).",
+        examples=[{"todo": 5, "in_progress": 2, "review": 1, "done": 10}],
+    )
+    overdue_count: int = Field(
+        ...,
+        description="Count of non-completed tasks whose due_date is before today.",
+        examples=[3],
+    )
+    assigned_count: int = Field(
+        ...,
+        description="Count of tasks with a non-null assignee (includes completed tasks).",
+        examples=[7],
+    )
+    total_count: int = Field(
+        ...,
+        description="Total task count in the workspace.",
+        examples=[18],
+    )
+    external_service: ExternalServiceResult = Field(
+        ...,
+        description="Result of the simulated external service call.",
+    )
+
+    model_config = ConfigDict(from_attributes=True)

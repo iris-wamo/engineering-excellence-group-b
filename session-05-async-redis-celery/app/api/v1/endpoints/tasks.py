@@ -21,6 +21,7 @@ from app.schemas.task import (
     TaskListResponse,
     TaskResponse,
     TaskStatusUpdate,
+    TaskSummaryResponse,
 )
 from app.schemas.task_import import (
     TaskBatchImportRequest,
@@ -128,6 +129,73 @@ async def list_tasks(
         project_id=project_id,
         assignee_id=assignee_id,
         workspace_id=workspace_id,
+    )
+
+
+@router.get(
+    "/summary",
+    response_model=TaskSummaryResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def get_task_summary(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    workspace_id: CurrentWorkspaceId,
+    external_delay: float = Query(
+        default=0.2,
+        ge=0.0,
+        le=10.0,
+        description="Simulated external service delay in seconds.",
+    ),
+    external_timeout: float = Query(
+        default=1.0,
+        gt=0.0,
+        le=10.0,
+        description="External call timeout threshold in seconds.",
+    ),
+) -> TaskSummaryResponse:
+    """Retrieve task summary asynchronously with non-blocking I/O and timeout enforcement."""
+    return await TaskService.get_task_summary(
+        db,
+        workspace_id=workspace_id,
+        external_delay=external_delay,
+        external_timeout=external_timeout,
+    )
+
+
+@router.get(
+    "/summary/blocking",
+    response_model=TaskSummaryResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def get_task_summary_blocking(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    workspace_id: CurrentWorkspaceId,
+    external_delay: float = Query(
+        default=0.2,
+        ge=0.0,
+        le=10.0,
+        description="Simulated external service delay in seconds.",
+    ),
+    external_timeout: float = Query(
+        default=1.0,
+        gt=0.0,
+        le=10.0,
+        description="External call timeout threshold in seconds.",
+    ),
+) -> TaskSummaryResponse:
+    """Retrieve task summary with synchronous blocking external call offloaded to a thread pool.
+
+    The external call is offloaded to a bounded ThreadPoolExecutor while database access
+    remains async on the event loop.
+    """
+    # Do not convert this endpoint to a synchronous `def` function or add a sync DB path.
+    # Starlette runs synchronous `def` endpoints on its own threadpool; here we only offload
+    # the slow external call to a threadpool so the async DB call stays on the event loop.
+    return await TaskService.get_task_summary_blocking(
+        db,
+        workspace_id=workspace_id,
+        external_delay=external_delay,
+        external_timeout=external_timeout,
     )
 
 

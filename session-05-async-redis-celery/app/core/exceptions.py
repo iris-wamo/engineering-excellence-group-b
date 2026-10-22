@@ -120,6 +120,29 @@ class TransactionSimulationError(AppError):
     status_code = 500
 
 
+class ExternalServiceTimeoutError(AppError):
+    """Raised when a simulated external service call exceeds the configured timeout."""
+
+    code = "EXTERNAL_SERVICE_TIMEOUT"
+    status_code = status.HTTP_504_GATEWAY_TIMEOUT
+
+    def __init__(
+        self,
+        message: str = "External service timed out",
+        timeout: float | None = None,
+        details: list[dict[str, Any]] | None = None,
+    ) -> None:
+        resolved_details = details
+        if resolved_details is None:
+            msg = (
+                f"Call exceeded the configured timeout of {timeout}s"
+                if timeout is not None
+                else "Call exceeded the configured timeout"
+            )
+            resolved_details = [{"field": "external_call", "message": msg}]
+        super().__init__(message, details=resolved_details)
+
+
 __all__ = [
     "AppError",
     "NotFoundError",
@@ -132,6 +155,7 @@ __all__ = [
     "UserNotFoundError",
     "ProjectMembershipRequiredError",
     "TransactionSimulationError",
+    "ExternalServiceTimeoutError",
     "ErrorDetail",
     "ErrorBody",
     "ErrorResponse",

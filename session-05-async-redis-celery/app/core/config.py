@@ -20,6 +20,9 @@ class Settings(BaseAppSettings):
     task_events_stream_group: str = "task-event-processors"
     task_events_stream_maxlen: int = 10_000
     task_events_dead_letter_stream: str = "taskflow:task-events:dead-letter"
+    # Task summary cache: how long cached metrics may be served at most (see
+    # docs/session-05/redis-caching.md). Writes invalidate earlier; this is the safety net.
+    task_summary_cache_ttl_seconds: int = 30
     # Celery broker and result backend (separate Redis databases from REDIS_URL)
     celery_broker_url: str = "redis://localhost:6379/1"
     celery_result_backend: str = "redis://localhost:6379/2"

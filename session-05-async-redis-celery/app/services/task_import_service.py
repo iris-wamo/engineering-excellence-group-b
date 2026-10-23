@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from taskflow_shared.enums import ImportStatus
 
+from app.cache.task_summary_cache import invalidate_summary
 from app.core.exceptions import AppError, NotFoundError
 from app.db.mongo import get_raw_task_imports_collection
 from app.models.task import Task
@@ -241,6 +242,8 @@ class TaskImportService:
                 await db.flush()
                 notification_id = notification.id
             await db.commit()
+            # Right after the commit, before anything that can still fail.
+            await invalidate_summary(task.workspace_id)
             await db.refresh(task)
             committed_task_id = task.id
 

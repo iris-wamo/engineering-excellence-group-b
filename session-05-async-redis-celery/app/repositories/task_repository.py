@@ -1,6 +1,6 @@
 """Data access layer for the Task model."""
 
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any
 
 from sqlalchemy import case, func, select
@@ -119,7 +119,8 @@ class TaskRepository:
         - assigned_count: tasks with non-null assignee_id
         - total_count: all tasks in the workspace
         """
-        current_day = today or date.today()
+        # Due dates are compared against the UTC calendar day, as in the reminder sweep.
+        current_day = today or datetime.now(UTC).date()
 
         stmt = select(
             func.count(case((Task.status == TaskStatus.todo, 1))).label("todo_count"),

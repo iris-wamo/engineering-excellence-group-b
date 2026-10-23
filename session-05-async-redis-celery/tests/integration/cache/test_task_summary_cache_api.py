@@ -1,14 +1,22 @@
 """Integration tests for caching GET /api/v1/tasks/summary in Redis."""
 
 import asyncio
+from typing import Any
 from unittest.mock import patch
 
 import pytest
 from httpx import AsyncClient
 from redis.asyncio import Redis
 
-from app.cache.task_summary_cache import summary_key, version_key
+from app.cache.task_summary_cache import (
+    invalidate_summary,
+    lookup_summary,
+    store_summary,
+    summary_key,
+    version_key,
+)
 from app.core.config import settings
+from app.models.enums import ProjectRole
 from app.repositories.task_repository import TaskRepository
 from tests.fixtures.auth import auth_headers_for
 from tests.fixtures.factories import DataFactory
@@ -103,3 +111,120 @@ async def test_summary_still_works_when_the_version_key_is_unreadable(
     response = await client.get(SUMMARY_URL, headers=viewer_headers)
 
     assert response.status_code == 200
+
+
+async def _summary(client: AsyncClient, headers: dict[str, str]) -> dict[str, Any]:
+    response = await client.get(SUMMARY_URL, headers=headers)
+    assert response.status_code == 200
+    body: dict[str, Any] = response.json()
+    return body
+
+
+async def test_creating_a_task_clears_the_cached_summary(
+    client: AsyncClient, redis_client: Redis, factory: DataFactory
+) -> None:
+    project = await factory.project()
+    owner = await factory.member(project, ProjectRole.owner)
+    assert (await _summary(client, owner.headers))["total_count"] == 0
+
+    created = await client.post(
+        "/api/v1/tasks", json={"title": "New", "project_id": project.id}, headers=owner.headers
+    )
+
+    assert created.status_code == 201
+    fresh = await _summary(client, owner.headers)
+    assert fresh["total_count"] == 1
+    assert fresh["counts_by_status"]["todo"] == 1
+
+
+async def test_changing_a_status_clears_the_cached_summary(
+    client: AsyncClient, redis_client: Redis, factory: DataFactory
+) -> None:
+    project = await factory.project()
+    developer = await factory.member(project)
+    task = await factory.task(project, assignee=developer.id)
+    assert (await _summary(client, developer.headers))["counts_by_status"]["todo"] == 1
+
+    changed = await client.patch(
+        f"/api/v1/tasks/{task.id}/status",
+        json={"status": "in_progress"},
+        headers=developer.headers,
+    )
+
+    assert changed.status_code == 200
+    counts = (await _summary(client, developer.headers))["counts_by_status"]
+    assert counts["todo"] == 0
+    assert counts["in_progress"] == 1
+
+
+async def test_assigning_a_task_clears_the_cached_summary(
+    client: AsyncClient, redis_client: Redis, factory: DataFactory
+) -> None:
+    project = await factory.project()
+    owner = await factory.member(project, ProjectRole.owner)
+    assignee = await factory.member(project)
+    task = await factory.task(project)
+    assert (await _summary(client, owner.headers))["assigned_count"] == 0
+
+    assigned = await client.post(
+        f"/api/v1/tasks/{task.id}/assign",
+        json={"assignee_id": assignee.id, "assigned_by_id": owner.id},
+        headers=owner.headers,
+    )
+
+    assert assigned.status_code == 200
+    assert (await _summary(client, owner.headers))["assigned_count"] == 1
+
+
+async def test_a_rolled_back_write_does_not_clear_the_cache(
+    client: AsyncClient, redis_client: Redis, factory: DataFactory
+) -> None:
+    project = await factory.project()
+    owner = await factory.member(project, ProjectRole.owner)
+    assignee = await factory.member(project)
+    task = await factory.task(project)
+    # The failed request rolls the session back, which expires loaded objects.
+    workspace_id = project.workspace_id
+    await _summary(client, owner.headers)
+
+    failed = await client.post(
+        f"/api/v1/tasks/{task.id}/assign",
+        json={"assignee_id": assignee.id, "assigned_by_id": owner.id, "simulate_failure": True},
+        headers=owner.headers,
+    )
+
+    assert failed.status_code == 500
+    assert await redis_client.get(version_key(workspace_id)) is None
+    assert await redis_client.exists(summary_key(workspace_id, 0)) == 1
+
+
+async def test_only_the_changed_workspace_is_cleared(
+    client: AsyncClient, redis_client: Redis, factory: DataFactory
+) -> None:
+    project = await factory.project()
+    owner = await factory.member(project, ProjectRole.owner)
+    other = await factory.workspace(name="Cache Gamma", slug="cache-gamma")
+    other_project = await factory.project(workspace=other.id)
+    other_owner = await factory.member(other_project, ProjectRole.owner)
+    await _summary(client, owner.headers)
+    await _summary(client, other_owner.headers)
+
+    await client.post(
+        "/api/v1/tasks", json={"title": "New", "project_id": project.id}, headers=owner.headers
+    )
+
+    assert await redis_client.get(version_key(project.workspace_id)) == "1"
+    assert await redis_client.get(version_key(other.id)) is None
+    assert await redis_client.exists(summary_key(other.id, 0)) == 1
+
+
+async def test_a_summary_computed_before_a_write_is_never_served_after_it(
+    redis_client: Redis,
+) -> None:
+    """A slow reader that stores its result after an invalidation must not poison the cache."""
+    stale_lookup = await lookup_summary(1)
+
+    await invalidate_summary(1)
+    await store_summary(1, stale_lookup.version, {"total_count": 99})
+
+    assert (await lookup_summary(1)).metrics is None

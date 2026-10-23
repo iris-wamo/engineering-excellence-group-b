@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.cache.task_summary_cache import lookup_summary, store_summary
+from app.cache.task_summary_cache import invalidate_summary, lookup_summary, store_summary
 from app.core.exceptions import (
     AppError,
     ExternalServiceTimeoutError,
@@ -294,6 +294,7 @@ class TaskService:
                 await db.rollback()
                 raise
         task = await TaskRepository.create(db, task)
+        await invalidate_summary(task.workspace_id)
 
         if notification_id is not None:
             await announce_new_task_assignee(task, notification_id, actor_id)
@@ -357,6 +358,7 @@ class TaskService:
             events.append(TaskEvent.status_changed(task, previous_status, actor_id=changed_by_id))
 
         task = await TaskRepository.update(db, task)
+        await invalidate_summary(task.workspace_id)
         # Published only after the commit, so consumers never see a change that rolled back.
         await publish_task_events(events)
         return TaskResponse.model_validate(task)
@@ -482,6 +484,7 @@ class TaskService:
             await db.rollback()
             raise
 
+        await invalidate_summary(task.workspace_id)
         # 6. Queue background notification job after successful commit
         if notification_id is not None:
             await _dispatch_assignment_notification(notification_id, task.id)

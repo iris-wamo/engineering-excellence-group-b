@@ -9,6 +9,7 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 
 from app.cache.task_summary_cache import (
     SummaryLookup,
+    invalidate_summary,
     lookup_summary,
     store_summary,
     summary_key,
@@ -29,6 +30,7 @@ def redis() -> Iterator[MagicMock]:
     client = MagicMock()
     client.get = AsyncMock(return_value=None)
     client.set = AsyncMock()
+    client.incr = AsyncMock(return_value=1)
     with patch("app.cache.task_summary_cache.get_redis_client", return_value=client):
         yield client
 
@@ -83,3 +85,15 @@ async def test_store_swallows_redis_errors(redis: MagicMock) -> None:
     redis.set.side_effect = RedisConnectionError("down")
 
     await store_summary(1, 0, METRICS)
+
+
+async def test_invalidate_bumps_the_workspace_version(redis: MagicMock) -> None:
+    await invalidate_summary(5)
+
+    redis.incr.assert_awaited_once_with(version_key(5))
+
+
+async def test_invalidate_swallows_redis_errors(redis: MagicMock) -> None:
+    redis.incr.side_effect = RedisConnectionError("down")
+
+    await invalidate_summary(5)

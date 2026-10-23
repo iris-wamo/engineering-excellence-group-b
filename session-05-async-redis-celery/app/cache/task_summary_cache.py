@@ -96,3 +96,26 @@ async def store_summary(workspace_id: int, version: int | None, metrics: dict[st
         logger.warning(
             "Could not store task summary in cache workspace_id=%s", workspace_id, exc_info=True
         )
+
+
+async def invalidate_summary(workspace_id: int) -> None:
+    """Move the workspace to a new cache version, so its cached summary is never read again.
+
+    Call after the database commit of any change that alters the summary. The old entry is
+    not deleted: it can no longer be reached and expires on its own TTL. Never raises: if
+    Redis is unreachable the change stays committed and stale data is bounded by the TTL.
+    """
+    try:
+        new_version = await get_redis_client().incr(version_key(workspace_id))
+    except (RedisError, OSError):
+        logger.warning(
+            "Could not invalidate task summary cache workspace_id=%s, stale data possible for up "
+            "to %ds",
+            workspace_id,
+            settings.task_summary_cache_ttl_seconds,
+            exc_info=True,
+        )
+        return
+    logger.info(
+        "Task summary cache INVALIDATED workspace_id=%s version=%d", workspace_id, new_version
+    )

@@ -202,7 +202,8 @@ async def get_task_summary_blocking(
     """Retrieve task summary with synchronous blocking external call offloaded to a thread pool.
 
     The external call is offloaded to a bounded ThreadPoolExecutor while database access
-    remains async on the event loop.
+    remains async on the event loop. Note: allowing external_delay up to 10.0s intentionally
+    demonstrates bounded pool saturation when timed-out worker threads keep sleeping.
     """
     # Do not convert this endpoint to a synchronous `def` function or add a sync DB path.
     # Starlette runs synchronous `def` endpoints on its own threadpool; here we only offload

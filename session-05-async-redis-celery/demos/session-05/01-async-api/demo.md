@@ -5,7 +5,7 @@
 - **Loom Link**: `[Manual Follow-up: Insert Loom recording URL here once recorded]`
 - **Recording Instructions**: Record a 2–3 minute walkthrough demonstrating:
   1. The task summary endpoint returning the 4 required pieces of data.
-  2. Executing `uv run python scripts/demo_async_vs_blocking.py` to highlight the side-by-side concurrency timing table (7.63x speedup).
+  2. Executing `uv run python scripts/demo_async_vs_blocking.py` to highlight the side-by-side concurrency timing table (2.43x speedup vs thread pool; ~7.5x vs loop starvation).
   3. The simulated timeout case triggering an HTTP 504 Gateway Timeout with the standard ADR-001 error response envelope.
 
 ---
@@ -13,7 +13,7 @@
 ## Objective
 Demonstrate the concrete engineering impact of asynchronous programming in FastAPI:
 1. Show how non-blocking I/O multiplexing (`asyncio.sleep`) allows multiple concurrent requests to overlap on a single thread.
-2. Demonstrate how synchronous blocking operations (`time.sleep`) cause event loop starvation and head-of-line blocking.
+2. Demonstrate how synchronous blocking operations (`time.sleep`) offloaded to a bounded thread pool (`max_workers=4`) process in batches, and how accidental synchronous blocking directly inside `async def` starves the event loop (tested in `test_sync_call_inside_async_starves_event_loop`).
 3. Verify that external call timeouts prevent hung dependencies from starving application resources by returning a standard HTTP 504 error response envelope.
 
 ---
@@ -52,7 +52,7 @@ curl -s -X GET "http://localhost:8000/api/v1/tasks/summary?external_delay=1.5&ex
 1. **Async Endpoint (`/tasks/summary`)**:
    Under 10 concurrent requests with 0.2s external delay, all requests should overlap on the asyncio event loop and complete in $\approx 0.2\text{s} - 0.3\text{s}$ total.
 2. **Blocking Endpoint (`/tasks/summary/blocking`)**:
-   Under 10 concurrent requests with 0.2s external delay, `time.sleep` blocks the event loop thread, serializing requests to $\approx 10 \times 0.2\text{s} = 2.0\text{s}$ total.
+   Under 10 concurrent requests with 0.2s external delay, the blocking external call is offloaded to a bounded `ThreadPoolExecutor(max_workers=4)`. Because the pool is limited to 4 workers, requests process in batches ($4 + 4 + 2$), completing in $\approx 3 \times 0.2\text{s} \approx 0.65\text{s}$ total. (By contrast, un-offloaded synchronous calls directly inside `async def` starve the event loop thread, serializing to $\approx 10 \times 0.2\text{s} = 2.0\text{s}$, as demonstrated in `test_sync_call_inside_async_starves_event_loop`).
 3. **Timeout Case**:
    When external delay exceeds the timeout threshold (e.g. 1.2s delay vs 0.5s timeout), the API should abort at the 0.5s deadline and return HTTP 504 with code `EXTERNAL_SERVICE_TIMEOUT`.
 
@@ -66,12 +66,12 @@ Execution of `scripts/demo_async_vs_blocking.py`:
 ===========================================================================
  SIDE-BY-SIDE PERFORMANCE COMPARISON SUMMARY
 ===========================================================================
-Endpoint                           | Requests | Total Time   | Avg Latency
+Endpoint                           | Requests | Total Time   | Avg Latency 
 -----------------------------------+----------+--------------+-------------
-GET /api/v1/tasks/summary (Async)  | 10       |     0.276s  |     0.261s
-GET /tasks/summary/blocking (Sync) | 10       |     2.106s  |     1.576s
+GET /api/v1/tasks/summary (Async)  | 10       |     0.268s  |     0.255s
+GET /tasks/summary/blocking (Sync) | 10       |     0.653s  |     0.403s
 ---------------------------------------------------------------------------
-Concurrency Speedup: 7.63x faster with non-blocking async!
+Concurrency Speedup: 2.43x faster with non-blocking async!
 ```
 
 ---

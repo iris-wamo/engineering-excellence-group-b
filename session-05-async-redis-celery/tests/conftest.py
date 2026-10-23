@@ -11,19 +11,6 @@ from collections.abc import AsyncGenerator, Iterator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-# On macOS, the default per-process file descriptor limit in Terminal is 256.
-# Running large integration suites exhausts this limit, causing OSError 24 (Too many open files)
-# and getaddrinfo failures. Automatically raise the soft limit up to the hard limit or 4096.
-try:
-    import resource
-
-    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-    if soft < 4096:
-        target = min(4096, hard) if hard > 0 else 4096
-        resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
-except (ImportError, ValueError, OSError):
-    pass
-
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession

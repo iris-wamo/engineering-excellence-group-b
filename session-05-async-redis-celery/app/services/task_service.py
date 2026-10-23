@@ -523,6 +523,13 @@ class TaskService:
 
         The external call runs before querying the database, ensuring no database connection
         is checked out from the pool while waiting.
+
+        Thread pool saturation note:
+        Because wait_for cancels only the await while the worker thread keeps sleeping,
+        a burst of timed-out requests can temporarily saturate the 4 workers, causing
+        subsequent calls to queue behind them. This bounded pool saturation is intentional
+        for demonstrating the concurrency limitations of thread-pool offloading under
+        synchronous blocking I/O compared to cooperative non-blocking async.
         """
         loop = asyncio.get_running_loop()
         # epsilon gives the blocking helper room to reach its own timeout and raise

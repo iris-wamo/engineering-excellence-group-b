@@ -6,7 +6,7 @@ This document details the implementation, configuration, and observed performanc
 
 The API provides two endpoints:
 - `GET /api/v1/tasks/summary`: Non-blocking asynchronous implementation using cooperative `asyncio` concurrency and external timeout protection.
-- `GET /api/v1/tasks/summary/blocking`: Blocking synchronous implementation using `time.sleep` to demonstrate event loop starvation under concurrent load.
+- `GET /api/v1/tasks/summary/blocking`: Synchronous blocking simulation offloaded to a bounded thread pool (`ThreadPoolExecutor(max_workers=4)`) via `loop.run_in_executor` to keep the event loop responsive. (Note: pure event-loop starvation from an accidental synchronous call directly inside `async def` is tested and demonstrated in `test_sync_call_inside_async_starves_event_loop`).
 
 Both endpoints enforce multi-tenant workspace isolation and return identical response schemas.
 
@@ -101,17 +101,18 @@ Executed using [`scripts/demo_async_vs_blocking.py`](../scripts/demo_async_vs_bl
 ===========================================================================
 Endpoint                           | Requests | Total Time   | Avg Latency 
 -----------------------------------+----------+--------------+-------------
-GET /api/v1/tasks/summary (Async)  | 10       |     0.276s  |     0.261s
-GET /tasks/summary/blocking (Sync) | 10       |     2.106s  |     1.576s
+GET /api/v1/tasks/summary (Async)  | 10       |     0.268s  |     0.255s
+GET /tasks/summary/blocking (Sync) | 10       |     0.653s  |     0.403s
 ---------------------------------------------------------------------------
-Concurrency Speedup: 7.63x faster with non-blocking async!
+Concurrency Speedup: 2.43x faster with non-blocking async!
 ```
 
 ### Engineering Findings
 1. **Why Async Succeeded**:
-   During `await asyncio.sleep(0.2)`, each request yielded execution back to the event loop. All 10 requests waited concurrently on their simulated network I/O, completing in approximately 0.28s total.
-2. **Why Blocking Degraded**:
-   `time.sleep(0.2)` blocked the thread running the `asyncio` event loop. Note that while `time.sleep()` releases the GIL for other OS threads, it completely blocks the single thread executing this event loop. In single-threaded asyncio, all other coroutines freeze, forcing the 10 requests to run sequentially and totaling 2.11s (approximately $10 \times 0.2\text{s}$).
+   During `await asyncio.sleep(0.2)`, each request yielded execution back to the event loop. All 10 requests waited concurrently on their simulated network I/O, completing in approximately 0.27s total.
+2. **Why Blocking Endpoint Took Longer**:
+   In `/tasks/summary/blocking`, the external call is offloaded to a bounded thread pool (`ThreadPoolExecutor(max_workers=4)`). Because the pool is limited to 4 workers, 10 concurrent requests cannot all run at once and must process in batches ($4 + 4 + 2$), taking 0.653s total (2.43x speedup for async).
+   *Note*: Pure event-loop starvation occurs when synchronous blocking code (like `time.sleep`) runs directly on the event loop thread without thread offloading. This failure mode is explicitly tested in `test_sync_call_inside_async_starves_event_loop` in `tests/integration/api/test_task_summary_api.py`, where $N=3$ requests serialize to $\ge 0.3\text{s}$.
 
 ---
 

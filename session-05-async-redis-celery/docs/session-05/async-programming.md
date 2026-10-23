@@ -4,7 +4,7 @@
 
 In TaskFlow Session 05, we introduce asynchronous API execution and evaluate how the FastAPI backend behaves under concurrent I/O-bound load. Specifically, we implement and benchmark a workspace-scoped **Task Summary** endpoint in two variations:
 1. **Asynchronous Non-Blocking (`GET /api/v1/tasks/summary`)**: Uses native cooperative concurrency with `asyncio.sleep` to simulate external service communication and enforces an external timeout using `asyncio.wait_for`.
-2. **Synchronous Blocking Simulation (`GET /api/v1/tasks/summary/blocking`)**: Uses synchronous `time.sleep` within an async handler to demonstrate event loop starvation and head-of-line blocking under concurrent requests.
+2. **Synchronous Blocking with Thread-Pool Offloading (`GET /api/v1/tasks/summary/blocking`)**: Uses synchronous `time.sleep` offloaded to a bounded `ThreadPoolExecutor(max_workers=4)` via `loop.run_in_executor` to prevent starving the event loop. (Note: pure event-loop starvation from an accidental synchronous call directly inside `async def` is tested and demonstrated in `test_sync_call_inside_async_starves_event_loop`).
 
 ---
 
@@ -29,28 +29,29 @@ FastAPI runs on an ASGI server (such as Uvicorn) backed by the Python `asyncio` 
 A common misconception is that declaring an endpoint as `async def` automatically makes its operations asynchronous. **It does not.**
 
 ### Event Loop Starvation
-If a coroutine executes a synchronous blocking call—such as `time.sleep(0.2)`, `requests.get(...)`, or heavy CPU-bound computation:
+If a coroutine executes a synchronous blocking call—such as `time.sleep(0.2)`, `requests.get(...)`, or heavy CPU-bound computation directly on the loop:
 - The OS thread running the `asyncio` event loop is physically blocked.
 - Note: While `time.sleep()` releases the GIL for other OS threads, it completely blocks the single thread executing this event loop. In single-threaded asyncio, all other coroutines freeze.
 - Because the event loop cannot tick, **no other async tasks, pending I/O callbacks, or timers can be executed**.
 - This creates **Head-of-Line (HoL) blocking**: 10 concurrent requests that each take 0.2s of blocking time are completely serialized, taking:
   $$\text{Total Time} \approx 10 \times 0.2\text{s} = 2.0\text{s}$$
-  Even worse, health-check probes (`/health`), authentication requests, and other unrelated endpoints on the same worker process will freeze until the blocking call returns.
+  Even worse, health-check probes (`/health`), authentication requests, and other unrelated endpoints on the same worker process will freeze until the blocking call returns. This failure mode is proven in `test_sync_call_inside_async_starves_event_loop`.
 
 ### Benchmark Evidence
-When running `scripts/demo_async_vs_blocking.py` with 10 concurrent requests and 0.2s external delay:
+When running `scripts/demo_async_vs_blocking.py` with 10 concurrent requests and 0.2s external delay (where the blocking endpoint is offloaded to a 4-worker thread pool):
 
 ```
 ===========================================================================
  SIDE-BY-SIDE PERFORMANCE COMPARISON SUMMARY
 ===========================================================================
-Endpoint                           | Requests | Total Time   | Avg Latency
+Endpoint                           | Requests | Total Time   | Avg Latency 
 -----------------------------------+----------+--------------+-------------
-GET /api/v1/tasks/summary (Async)  | 10       |     0.276s  |     0.261s
-GET /tasks/summary/blocking (Sync) | 10       |     2.106s  |     1.576s
+GET /api/v1/tasks/summary (Async)  | 10       |     0.268s  |     0.255s
+GET /tasks/summary/blocking (Sync) | 10       |     0.653s  |     0.403s
 ---------------------------------------------------------------------------
-Concurrency Speedup: 7.63x faster with non-blocking async!
+Concurrency Speedup: 2.43x faster with non-blocking async!
 ```
+In `/tasks/summary/blocking`, offloading to a 4-worker thread pool processes requests in batches ($4 + 4 + 2$), completing in 0.653s (2.43x speedup for async). When blocking code runs directly on the event loop without thread offloading, requests serialize to $\approx 10 \times 0.2\text{s} = 2.0\text{s}$ (~7.5x slower), as verified in `test_sync_call_inside_async_starves_event_loop`.
 
 ---
 

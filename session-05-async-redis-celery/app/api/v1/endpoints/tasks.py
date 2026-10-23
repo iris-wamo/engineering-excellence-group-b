@@ -148,6 +148,16 @@ async def list_tasks(
     )
 
 
+ExternalDelay = Annotated[
+    float,
+    Query(ge=0.0, le=10.0, description="Simulated external service delay in seconds."),
+]
+ExternalTimeout = Annotated[
+    float,
+    Query(gt=0.0, le=10.0, description="External call timeout threshold in seconds."),
+]
+
+
 @router.get(
     "/summary",
     response_model=TaskSummaryResponse,
@@ -156,18 +166,8 @@ async def list_tasks(
 async def get_task_summary(
     db: Annotated[AsyncSession, Depends(get_db)],
     workspace_id: CurrentWorkspaceId,
-    external_delay: float = Query(
-        default=0.2,
-        ge=0.0,
-        le=10.0,
-        description="Simulated external service delay in seconds.",
-    ),
-    external_timeout: float = Query(
-        default=1.0,
-        gt=0.0,
-        le=10.0,
-        description="External call timeout threshold in seconds.",
-    ),
+    external_delay: ExternalDelay = 0.2,
+    external_timeout: ExternalTimeout = 1.0,
 ) -> TaskSummaryResponse:
     """Retrieve task summary asynchronously with non-blocking I/O and timeout enforcement."""
     return await TaskService.get_task_summary(
@@ -186,24 +186,14 @@ async def get_task_summary(
 async def get_task_summary_blocking(
     db: Annotated[AsyncSession, Depends(get_db)],
     workspace_id: CurrentWorkspaceId,
-    external_delay: float = Query(
-        default=0.2,
-        ge=0.0,
-        le=10.0,
-        description="Simulated external service delay in seconds.",
-    ),
-    external_timeout: float = Query(
-        default=1.0,
-        gt=0.0,
-        le=10.0,
-        description="External call timeout threshold in seconds.",
-    ),
+    external_delay: ExternalDelay = 0.2,
+    external_timeout: ExternalTimeout = 1.0,
 ) -> TaskSummaryResponse:
     """Retrieve task summary with synchronous blocking external call offloaded to a thread pool.
 
     The external call is offloaded to a bounded ThreadPoolExecutor while database access
-    remains async on the event loop. Note: allowing external_delay up to 10.0s intentionally
-    demonstrates bounded pool saturation when timed-out worker threads keep sleeping.
+    remains async on the event loop. The pool has 4 workers, so under heavier concurrency
+    requests wait for a free worker; the timeout only counts the external call itself.
     """
     # Do not convert this endpoint to a synchronous `def` function or add a sync DB path.
     # Starlette runs synchronous `def` endpoints on its own threadpool; here we only offload

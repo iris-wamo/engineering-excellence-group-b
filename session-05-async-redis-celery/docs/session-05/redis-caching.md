@@ -27,7 +27,7 @@ parameters. Both summary endpoints share one entry because they read the same me
 `TASK_SUMMARY_CACHE_TTL_SECONDS`, default **30s**. It is a safety net, not the freshness
 mechanism: writes invalidate immediately. 30s keeps the worst case small if an invalidation
 is lost (Redis down during a write), and it is also what makes `overdue_count` correct
-across midnight, since that value changes with the date and no task write.
+across midnight, since that value changes with the (UTC) date and no task write.
 
 ## Invalidation strategy
 

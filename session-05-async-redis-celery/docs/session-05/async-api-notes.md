@@ -8,6 +8,8 @@ The API provides two endpoints:
 - `GET /api/v1/tasks/summary`: Non-blocking asynchronous implementation using cooperative `asyncio` concurrency and external timeout protection.
 - `GET /api/v1/tasks/summary/blocking`: Synchronous blocking simulation offloaded to a bounded thread pool (`ThreadPoolExecutor(max_workers=4)`) via `loop.run_in_executor` to keep the event loop responsive. (Note: pure event-loop starvation from an accidental synchronous call directly inside `async def` is tested and demonstrated in `test_sync_call_inside_async_starves_event_loop`).
 
+The blocking endpoint runs its external call in a 4-worker thread pool. The timeout is enforced by the worker and counts only the call itself, not time spent waiting for a free worker, so a busy pool makes requests slower rather than failing them with 504.
+
 Both endpoints enforce multi-tenant workspace isolation and return identical response schemas.
 
 ---
@@ -33,7 +35,7 @@ Both endpoints enforce multi-tenant workspace isolation and return identical res
 ### A. Successful Response (HTTP 200 OK)
 The summary returns all four required metrics in a single aggregated payload:
 1. `counts_by_status`: Object containing task counts for every supported status (`todo`, `in_progress`, `review`, `done`).
-2. `overdue_count`: Number of tasks whose `due_date < today` and whose status is not `done`.
+2. `overdue_count`: Number of tasks whose `due_date` is before today's UTC date and whose status is not `done`.
 3. `assigned_count`: Number of tasks with a non-null `assignee_id`.
 4. `external_service`: Metadata from the simulated external dependency.
 
@@ -99,7 +101,7 @@ Executed using [`scripts/demo_async_vs_blocking.py`](../scripts/demo_async_vs_bl
 ===========================================================================
  SIDE-BY-SIDE PERFORMANCE COMPARISON SUMMARY
 ===========================================================================
-Endpoint                           | Requests | Total Time   | Avg Latency 
+Endpoint                           | Requests | Total Time   | Avg Latency
 -----------------------------------+----------+--------------+-------------
 GET /api/v1/tasks/summary (Async)  | 10       |     0.268s  |     0.255s
 GET /tasks/summary/blocking (Sync) | 10       |     0.653s  |     0.403s

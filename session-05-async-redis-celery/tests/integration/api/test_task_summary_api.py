@@ -2,7 +2,8 @@
 
 import asyncio
 import time
-from datetime import date, timedelta
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from httpx import AsyncClient
@@ -10,6 +11,7 @@ from redis.asyncio import Redis
 
 from app.models.enums import TaskStatus
 from app.schemas.task import ExternalServiceResult
+from app.services import task_service
 from tests.fixtures.auth import auth_headers_for
 from tests.fixtures.factories import DataFactory
 
@@ -28,7 +30,7 @@ async def test_async_task_summary_success_with_all_four_pieces_of_data(
 
     project = await factory.project()
     user = await factory.user()
-    today = date.today()
+    today = datetime.now(UTC).date()
     past_date = today - timedelta(days=5)
     future_date = today + timedelta(days=5)
 
@@ -113,7 +115,7 @@ async def test_blocking_task_summary_success_matches_structure(
     """Blocking summary endpoint returns identical metrics structure and mode='blocking'."""
     project = await factory.project()
     user = await factory.user()
-    today = date.today()
+    today = datetime.now(UTC).date()
     past_due = today - timedelta(days=2)
     future_due = today + timedelta(days=2)
 
@@ -295,7 +297,7 @@ async def test_task_summary_due_date_boundary_conditions(
 ) -> None:
     """Overdue count correctly handles boundary conditions (today, past, future, done, null)."""
     project = await factory.project()
-    today = date.today()
+    today = datetime.now(UTC).date()
 
     # Past due and active -> OVERDUE
     await factory.task(project, status=TaskStatus.todo, due_date=today - timedelta(days=1))
@@ -401,3 +403,21 @@ async def test_async_call_inside_async_overlaps(
 
     # Concurrently overlapping requests complete well below sequential time (N * delay)
     assert elapsed < n * delay
+
+
+async def test_blocking_summary_queue_wait_does_not_count_against_the_timeout(
+    client: AsyncClient,
+    viewer_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A busy pool delays a call but never turns it into a 504: the timeout covers the call."""
+    monkeypatch.setattr(task_service, "_EXECUTOR", ThreadPoolExecutor(max_workers=1))
+    url = "/api/v1/tasks/summary/blocking?external_delay=0.3&external_timeout=0.4"
+
+    responses = await asyncio.gather(
+        client.get(url, headers=viewer_headers), client.get(url, headers=viewer_headers)
+    )
+
+    # The second call waits about 0.3s for the only worker, then runs for 0.3s: 0.6s in
+    # all, more than the 0.4s timeout, yet within it as far as the call itself goes.
+    assert [r.status_code for r in responses] == [200, 200]

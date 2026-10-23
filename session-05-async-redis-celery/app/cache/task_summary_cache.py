@@ -26,6 +26,7 @@ from app.db.redis import get_redis_client
 logger = logging.getLogger(__name__)
 
 _KEY_PREFIX = "taskflow:v1"
+_METRIC_FIELDS = frozenset({"counts_by_status", "overdue_count", "assigned_count", "total_count"})
 
 
 def version_key(workspace_id: int) -> str:
@@ -68,8 +69,10 @@ async def lookup_summary(workspace_id: int) -> SummaryLookup:
     try:
         metrics = json.loads(raw)
     except ValueError:
+        metrics = None
+    if not isinstance(metrics, dict) or not _METRIC_FIELDS <= metrics.keys():
         logger.warning(
-            "Task summary cache entry is not valid JSON, treating as a miss workspace_id=%s",
+            "Task summary cache entry is malformed, treating as a miss workspace_id=%s",
             workspace_id,
         )
         return SummaryLookup(metrics=None, version=version)

@@ -242,8 +242,9 @@ class TaskImportService:
                 await db.flush()
                 notification_id = notification.id
             await db.commit()
-            await db.refresh(task)
+            # Right after the commit, before anything that can still fail.
             await invalidate_summary(task.workspace_id)
+            await db.refresh(task)
             committed_task_id = task.id
 
         except Exception as exc:

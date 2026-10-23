@@ -61,8 +61,11 @@ async def test_lookup_fails_open_when_redis_is_down(redis: MagicMock) -> None:
     assert await lookup_summary(1) == SummaryLookup(metrics=None, version=None)
 
 
-async def test_lookup_treats_corrupt_entry_as_a_miss(redis: MagicMock) -> None:
-    redis.get.side_effect = lambda key: "not json" if key == summary_key(1, 0) else None
+@pytest.mark.parametrize("stored", ["not json", "null", "[1, 2]", '{"total_count": 1}'])
+async def test_lookup_treats_a_corrupt_or_wrongly_shaped_entry_as_a_miss(
+    redis: MagicMock, stored: str
+) -> None:
+    redis.get.side_effect = lambda key: stored if key == summary_key(1, 0) else None
 
     assert await lookup_summary(1) == SummaryLookup(metrics=None, version=0)
 

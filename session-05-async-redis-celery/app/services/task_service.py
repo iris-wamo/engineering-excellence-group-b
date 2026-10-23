@@ -3,10 +3,12 @@ import atexit
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.cache.task_summary_cache import lookup_summary, store_summary
 from app.core.exceptions import (
     AppError,
     ExternalServiceTimeoutError,
@@ -102,6 +104,16 @@ def _simulate_external_call_blocking(delay: float, timeout: float) -> ExternalSe
         latency_ms=latency_ms,
         mode="blocking",
     )
+
+
+async def _load_summary_metrics(db: AsyncSession, workspace_id: int) -> dict[str, Any]:
+    """Summary metrics from the cache, falling back to the database on a miss."""
+    lookup = await lookup_summary(workspace_id)
+    if lookup.metrics is not None:
+        return lookup.metrics
+    metrics = await TaskRepository.get_summary_metrics(db, workspace_id=workspace_id)
+    await store_summary(workspace_id, lookup.version, metrics)
+    return metrics
 
 
 async def _get_project_or_404(
@@ -492,7 +504,7 @@ class TaskService:
         external_result = await _simulate_external_call_async(
             delay=external_delay, timeout=external_timeout
         )
-        metrics = await TaskRepository.get_summary_metrics(db, workspace_id=workspace_id)
+        metrics = await _load_summary_metrics(db, workspace_id)
         return TaskSummaryResponse(
             workspace_id=workspace_id,
             counts_by_status=metrics["counts_by_status"],
@@ -553,7 +565,7 @@ class TaskService:
                 timeout=external_timeout,
             ) from None
 
-        metrics = await TaskRepository.get_summary_metrics(db, workspace_id=workspace_id)
+        metrics = await _load_summary_metrics(db, workspace_id)
         return TaskSummaryResponse(
             workspace_id=workspace_id,
             counts_by_status=metrics["counts_by_status"],

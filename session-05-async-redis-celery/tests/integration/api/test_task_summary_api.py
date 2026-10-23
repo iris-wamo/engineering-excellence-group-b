@@ -6,11 +6,17 @@ from datetime import date, timedelta
 
 import pytest
 from httpx import AsyncClient
+from redis.asyncio import Redis
 
 from app.models.enums import TaskStatus
 from app.schemas.task import ExternalServiceResult
 from tests.fixtures.auth import auth_headers_for
 from tests.fixtures.factories import DataFactory
+
+
+@pytest.fixture(autouse=True)
+async def empty_summary_cache(redis_client: Redis) -> None:
+    """Every test starts without cached summaries: the database is rolled back, Redis is not."""
 
 
 async def test_async_task_summary_success_with_all_four_pieces_of_data(

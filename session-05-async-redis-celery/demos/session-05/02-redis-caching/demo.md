@@ -1,7 +1,8 @@
 # Demo 02 — Redis Caching and Cache Invalidation
 
 ## Loom Video
-- **Loom Link**: `[Manual Follow-up: insert Loom recording URL]`
+- **Part 1**: https://www.loom.com/share/fbe43bb853634ffca99e6fe565fb94b0
+- **Part 2**: https://www.loom.com/share/835e921647574f119bdfa122b87bc96f
 
 ## Objective
 Cache the task summary in Redis, clear it when a task changes, and let it expire after its TTL.

@@ -228,3 +228,21 @@ async def test_a_summary_computed_before_a_write_is_never_served_after_it(
     await store_summary(1, stale_lookup.version, {"total_count": 99})
 
     assert (await lookup_summary(1)).metrics is None
+
+
+async def test_importing_a_task_clears_the_cached_summary(
+    client: AsyncClient,
+    redis_client: Redis,
+    factory: DataFactory,
+    viewer_headers: dict[str, str],
+) -> None:
+    project = await factory.project()
+    assert (await _summary(client, viewer_headers))["total_count"] == 0
+
+    imported = await client.post(
+        "/api/v1/tasks/import",
+        json={"raw_payload": {"summary": "Imported", "project_id": project.id}},
+    )
+
+    assert imported.status_code == 201
+    assert (await _summary(client, viewer_headers))["total_count"] == 1

@@ -3,10 +3,12 @@ import atexit
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.cache.task_summary_cache import invalidate_summary, lookup_summary, store_summary
 from app.core.exceptions import (
     AppError,
     ExternalServiceTimeoutError,
@@ -74,17 +76,17 @@ async def _simulate_external_call_async(delay: float, timeout: float) -> Externa
 def _simulate_external_call_blocking(delay: float, timeout: float) -> ExternalServiceResult:
     """Simulate a synchronous blocking external service call.
 
-    Uses time.sleep(delay) on the main thread, blocking the thread running the asyncio event loop.
-    This demonstrates event loop starvation and head-of-line blocking under concurrency.
+    Uses time.sleep, which blocks the thread that calls it. The summary endpoint calls this
+    in a ThreadPoolExecutor worker, so the event loop stays free. Called directly from an
+    `async def`, it blocks the event-loop thread instead: that is the event loop starvation
+    shown by test_sync_call_inside_async_starves_event_loop.
 
     Timeout behavior simulation:
-    In a real synchronous HTTP client (e.g. `requests` or `urllib` with a timeout parameter),
-    the underlying socket read/connect blocks the OS thread until either data arrives or the
-    socket read timeout expires. If the remote service is unresponsive, the thread remains
-    blocked for the full timeout duration before raising a socket timeout exception.
-    During that entire window, the thread running the event loop is completely incapacitated.
-    Here, when delay > timeout, we simulate this by blocking the thread with time.sleep(timeout)
-    and then raising ExternalServiceTimeoutError (HTTP 504).
+    A real synchronous HTTP client (e.g. `requests` with a timeout parameter) blocks its
+    thread until data arrives or the socket timeout expires, and nothing outside the thread
+    can interrupt it. Here, when delay > timeout, we simulate that by sleeping for `timeout`
+    and then raising ExternalServiceTimeoutError (HTTP 504). The deadline is therefore
+    enforced inside the thread that makes the call, counted from when the call starts.
     """
     start = time.perf_counter()
     if delay > timeout:
@@ -102,6 +104,29 @@ def _simulate_external_call_blocking(delay: float, timeout: float) -> ExternalSe
         latency_ms=latency_ms,
         mode="blocking",
     )
+
+
+def _build_summary_response(
+    workspace_id: int, metrics: dict[str, Any], external_result: ExternalServiceResult
+) -> TaskSummaryResponse:
+    return TaskSummaryResponse(
+        workspace_id=workspace_id,
+        counts_by_status=metrics["counts_by_status"],
+        overdue_count=metrics["overdue_count"],
+        assigned_count=metrics["assigned_count"],
+        total_count=metrics["total_count"],
+        external_service=external_result,
+    )
+
+
+async def _load_summary_metrics(db: AsyncSession, workspace_id: int) -> dict[str, Any]:
+    """Summary metrics from the cache, falling back to the database on a miss."""
+    lookup = await lookup_summary(workspace_id)
+    if lookup.metrics is not None:
+        return lookup.metrics
+    metrics = await TaskRepository.get_summary_metrics(db, workspace_id=workspace_id)
+    await store_summary(workspace_id, lookup.version, metrics)
+    return metrics
 
 
 async def _get_project_or_404(
@@ -282,6 +307,7 @@ class TaskService:
                 await db.rollback()
                 raise
         task = await TaskRepository.create(db, task)
+        await invalidate_summary(task.workspace_id)
 
         if notification_id is not None:
             await announce_new_task_assignee(task, notification_id, actor_id)
@@ -345,6 +371,7 @@ class TaskService:
             events.append(TaskEvent.status_changed(task, previous_status, actor_id=changed_by_id))
 
         task = await TaskRepository.update(db, task)
+        await invalidate_summary(task.workspace_id)
         # Published only after the commit, so consumers never see a change that rolled back.
         await publish_task_events(events)
         return TaskResponse.model_validate(task)
@@ -470,6 +497,7 @@ class TaskService:
             await db.rollback()
             raise
 
+        await invalidate_summary(task.workspace_id)
         # 6. Queue background notification job after successful commit
         if notification_id is not None:
             await _dispatch_assignment_notification(notification_id, task.id)
@@ -492,15 +520,8 @@ class TaskService:
         external_result = await _simulate_external_call_async(
             delay=external_delay, timeout=external_timeout
         )
-        metrics = await TaskRepository.get_summary_metrics(db, workspace_id=workspace_id)
-        return TaskSummaryResponse(
-            workspace_id=workspace_id,
-            counts_by_status=metrics["counts_by_status"],
-            overdue_count=metrics["overdue_count"],
-            assigned_count=metrics["assigned_count"],
-            total_count=metrics["total_count"],
-            external_service=external_result,
-        )
+        metrics = await _load_summary_metrics(db, workspace_id)
+        return _build_summary_response(workspace_id, metrics, external_result)
 
     @classmethod
     async def get_task_summary_blocking(
@@ -512,53 +533,22 @@ class TaskService:
     ) -> TaskSummaryResponse:
         """Fetch task summary with the blocking external call offloaded to a thread pool.
 
-        The slow external call is offloaded to a bounded ThreadPoolExecutor so it does not
-        block the asyncio event loop thread, while the database query remains async on the loop.
+        The slow external call runs in a bounded ThreadPoolExecutor so it does not block the
+        asyncio event loop thread, while the database query remains async on the loop.
 
-        IMPORTANT:
-        Wrapping the executor await with asyncio.wait_for cancels the *await* (the asyncio Future),
-        NOT the running OS thread. Synchronous blocking operations (like synchronous HTTP clients
-        blocked on socket read/connect) cannot be interrupted from Python. The thread continues
-        running in the background until its timeout or completion.
+        The timeout is enforced by the worker itself (see _simulate_external_call_blocking),
+        measured from when the call starts. There is deliberately no outer asyncio.wait_for:
+        it would count time spent queued behind other calls against this call, returning 504
+        for a call that never ran when the pool is busy, and it could not stop a running
+        thread anyway. With more than 4 concurrent requests, later ones wait for a free
+        worker, so their latency grows; a worker is held for at most min(delay, timeout).
 
         The external call runs before querying the database, ensuring no database connection
         is checked out from the pool while waiting.
-
-        Thread pool saturation note:
-        Because wait_for cancels only the await while the worker thread keeps sleeping,
-        a burst of timed-out requests can temporarily saturate the 4 workers, causing
-        subsequent calls to queue behind them. This bounded pool saturation is intentional
-        for demonstrating the concurrency limitations of thread-pool offloading under
-        synchronous blocking I/O compared to cooperative non-blocking async.
         """
         loop = asyncio.get_running_loop()
-        # epsilon gives the blocking helper room to reach its own timeout and raise
-        # ExternalServiceTimeoutError first, so callers see the helper's timeout value
-        # rather than a generic wait_for cancellation.
-        epsilon = 0.05
-        try:
-            external_result = await asyncio.wait_for(
-                loop.run_in_executor(
-                    _EXECUTOR,
-                    _simulate_external_call_blocking,
-                    external_delay,
-                    external_timeout,
-                ),
-                timeout=external_timeout + epsilon,
-            )
-        # Builtin TimeoutError is raised by asyncio.wait_for in Python >= 3.11 (PEP 654).
-        except TimeoutError:
-            raise ExternalServiceTimeoutError(
-                message="External service timed out",
-                timeout=external_timeout,
-            ) from None
-
-        metrics = await TaskRepository.get_summary_metrics(db, workspace_id=workspace_id)
-        return TaskSummaryResponse(
-            workspace_id=workspace_id,
-            counts_by_status=metrics["counts_by_status"],
-            overdue_count=metrics["overdue_count"],
-            assigned_count=metrics["assigned_count"],
-            total_count=metrics["total_count"],
-            external_service=external_result,
+        external_result = await loop.run_in_executor(
+            _EXECUTOR, _simulate_external_call_blocking, external_delay, external_timeout
         )
+        metrics = await _load_summary_metrics(db, workspace_id)
+        return _build_summary_response(workspace_id, metrics, external_result)

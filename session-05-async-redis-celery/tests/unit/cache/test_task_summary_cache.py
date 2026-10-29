@@ -70,6 +70,26 @@ async def test_lookup_treats_a_corrupt_or_wrongly_shaped_entry_as_a_miss(
     assert await lookup_summary(1) == SummaryLookup(metrics=None, version=0)
 
 
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"overdue_count": "1"},
+        {"assigned_count": None},
+        {"total_count": 3.5},
+        {"total_count": True},
+        {"counts_by_status": []},
+        {"counts_by_status": {"todo": "1"}},
+    ],
+)
+async def test_lookup_treats_wrongly_typed_metric_values_as_a_miss(
+    redis: MagicMock, bad: dict[str, object]
+) -> None:
+    stored = json.dumps({**METRICS, **bad})
+    redis.get.side_effect = lambda key: stored if key == summary_key(1, 0) else None
+
+    assert await lookup_summary(1) == SummaryLookup(metrics=None, version=0)
+
+
 async def test_store_sets_the_entry_with_the_configured_ttl(redis: MagicMock) -> None:
     await store_summary(1, 2, METRICS)
 

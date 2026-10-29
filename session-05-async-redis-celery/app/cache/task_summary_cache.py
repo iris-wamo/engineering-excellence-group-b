@@ -29,6 +29,22 @@ _KEY_PREFIX = "taskflow:v1"
 _METRIC_FIELDS = frozenset({"counts_by_status", "overdue_count", "assigned_count", "total_count"})
 
 
+def _is_count(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_valid_metrics(metrics: Any) -> bool:
+    """True when the entry has every metric field with the type the response expects."""
+    if not isinstance(metrics, dict) or not _METRIC_FIELDS <= metrics.keys():
+        return False
+    by_status = metrics["counts_by_status"]
+    return (
+        isinstance(by_status, dict)
+        and all(isinstance(k, str) and _is_count(v) for k, v in by_status.items())
+        and all(_is_count(metrics[f]) for f in _METRIC_FIELDS - {"counts_by_status"})
+    )
+
+
 def version_key(workspace_id: int) -> str:
     return f"{_KEY_PREFIX}:ws:{workspace_id}:task_summary:version"
 
@@ -70,7 +86,7 @@ async def lookup_summary(workspace_id: int) -> SummaryLookup:
         metrics = json.loads(raw)
     except ValueError:
         metrics = None
-    if not isinstance(metrics, dict) or not _METRIC_FIELDS <= metrics.keys():
+    if not _is_valid_metrics(metrics):
         logger.warning(
             "Task summary cache entry is malformed, treating as a miss workspace_id=%s",
             workspace_id,

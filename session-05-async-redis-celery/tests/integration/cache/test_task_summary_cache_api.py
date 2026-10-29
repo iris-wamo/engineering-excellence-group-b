@@ -223,10 +223,16 @@ async def test_a_summary_computed_before_a_write_is_never_served_after_it(
 ) -> None:
     """A slow reader that stores its result after an invalidation must not poison the cache."""
     stale_lookup = await lookup_summary(1)
+    assert stale_lookup.version is not None
 
     await invalidate_summary(1)
-    await store_summary(1, stale_lookup.version, {"total_count": 99})
+    await store_summary(
+        1,
+        stale_lookup.version,
+        {"counts_by_status": {}, "overdue_count": 0, "assigned_count": 0, "total_count": 99},
+    )
 
+    assert await redis_client.exists(summary_key(1, stale_lookup.version)) == 1
     assert (await lookup_summary(1)).metrics is None
 
 

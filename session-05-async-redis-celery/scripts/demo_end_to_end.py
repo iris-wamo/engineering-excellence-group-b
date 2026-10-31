@@ -237,11 +237,18 @@ async def show_cache(api: httpx.AsyncClient, redis: Redis) -> None:
     step("Step 2: Read the task summary twice (cache miss, then hit)")
     first, first_ms = await timed(api.get("/api/v1/tasks/summary"))
     first.raise_for_status()
-    key = summary_key(WORKSPACE_ID, await cache_version(redis))
+    version = await cache_version(redis)
+    key = summary_key(WORKSPACE_ID, version)
     ttl_after_first = await redis.pttl(key)
     second, second_ms = await timed(api.get("/api/v1/tasks/summary"))
     second.raise_for_status()
     ttl_after_second = await redis.pttl(key)
+    version_after = await cache_version(redis)
+    if not check(
+        version_after == version,
+        f"no write between the two reads (cache version {version} -> {version_after})",
+    ):
+        return
 
     print(
         f"  • 1st read {first_ms:.0f} ms, 2nd read {second_ms:.0f} ms "
@@ -383,6 +390,25 @@ async def flower_jobs(
     return cast(dict[str, dict[str, Any]], response.json())
 
 
+def check_flower_delivery(deliveries: dict[str, dict[str, Any]], notification_id: int) -> None:
+    delivery = next(
+        (
+            (job_id, info)
+            for job_id, info in deliveries.items()
+            if (flower_value(info.get("kwargs")) or {}).get("notification_id") == notification_id
+        ),
+        None,
+    )
+    state = delivery[1].get("state") if delivery else None
+    if check(
+        state == "SUCCESS",
+        f"Flower lists the delivery job for notification {notification_id} as succeeded "
+        f"(state {state})",
+    ):
+        assert delivery is not None
+        print(f"  • {FLOWER_URL}/task/{delivery[0]}")
+
+
 async def check_flower(notification_id: int, task_id: int) -> None:
     step("Step 6: Flower shows the jobs behind the flow")
     auth = flower_auth()
@@ -401,22 +427,10 @@ async def check_flower(notification_id: int, task_id: int) -> None:
         check(False, f"Could not read job history from Flower at {FLOWER_URL} ({exc})")
         return
 
-    delivery = next(
-        (
-            (job_id, info)
-            for job_id, info in deliveries.items()
-            if (flower_value(info.get("kwargs")) or {}).get("notification_id") == notification_id
-        ),
-        None,
-    )
-    state = delivery[1].get("state") if delivery else None
-    if check(
-        state == "SUCCESS",
-        f"Flower lists the delivery job for notification {notification_id} as succeeded "
-        f"(state {state})",
-    ):
-        assert delivery is not None
-        print(f"  • {FLOWER_URL}/task/{delivery[0]}")
+    if notification_id:
+        check_flower_delivery(deliveries, notification_id)
+    else:
+        print("  [SKIP] no notification was delivered in step 3, so there is no job to find")
 
     sweep = next(
         (

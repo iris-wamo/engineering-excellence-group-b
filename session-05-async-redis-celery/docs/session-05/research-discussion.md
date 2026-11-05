@@ -1,7 +1,10 @@
 # Session 05 — Research & Reading Discussion
 
 ## Overview
-Placeholder for Session 05 research reading questions and implementation trade-offs.
+Reading questions for Session 05, by topic. The tradeoffs we actually hit while building
+them, and the questions still open, are collected in
+[`end-to-end-flow.md` §4](end-to-end-flow.md#4-open-tradeoffs-and-questions); each topic doc
+answers its own questions in detail.
 
 ## Discussion Questions by Topic
 - **Async programming**: What does async improve? Concurrency vs parallelism? Blocking I/O inside async? When to use Celery instead?

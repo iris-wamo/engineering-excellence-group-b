@@ -17,3 +17,7 @@ celery-demo: ## Run end-to-end Celery jobs demonstration (success, retry, idempo
 .PHONY: beat-demo
 beat-demo: ## Run the Celery Beat reminder demo (due-date filter, overlap lock, dedup; prints the Flower URL)
 	uv run python -m scripts.demo_celery_beat
+
+.PHONY: flow-demo
+flow-demo: ## End-to-end demo against the running Docker stack: one task change through API, cache, events, worker, Beat and Flower
+	uv run python -m scripts.demo_end_to_end

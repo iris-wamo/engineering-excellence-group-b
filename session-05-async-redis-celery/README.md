@@ -17,6 +17,7 @@ The database design this is built from is documented in
 
 - [What you need](#what-you-need)
 - [Quick start with Docker](#quick-start-with-docker)
+- [Full-stack walkthrough](#full-stack-walkthrough)
 - [Step 1 — Install uv](#step-1--install-uv)
 - [Step 2 — Install PostgreSQL](#step-2--install-postgresql)
   - [macOS](#macos)
@@ -76,6 +77,37 @@ docker compose exec db sh -c 'createdb -U "$POSTGRES_USER" "${POSTGRES_DB}_test"
 
 The `.env.example` defaults point host commands at the Docker ports: PostgreSQL on **5433**,
 MongoDB on 27017 and Redis on 6379. To run without Docker, follow Steps 1–4 below.
+
+---
+
+## Full-stack walkthrough
+
+`make docker-up` starts every service the Session 05 flow needs. A task change goes through
+all of them: the API commits and responds, Redis invalidates the cache and carries the
+events and the jobs, the worker delivers the notification, Beat schedules reminders, and
+Flower shows the jobs. The full trace, the failure cases and the tradeoffs are in
+[`docs/session-05/end-to-end-flow.md`](docs/session-05/end-to-end-flow.md).
+
+| Service | Address | Role in the flow | Watch it with |
+|---------|---------|------------------|---------------|
+| `api` | <http://localhost:8000/docs> | Commits the change, invalidates the cache, queues the job, publishes the events | `make docker-logs` |
+| `db` | `localhost:5433` | Tasks, history, and the `notification` outbox | `make docker-db-shell` |
+| `mongo` | `localhost:27017` | Raw task imports (not part of this flow) | |
+| `redis` | `localhost:6379` | db 0: cache and task events · db 1: Celery broker · db 2: results | `make redis-cli`, `make events-streams` |
+| `celery-worker` | | Delivers notifications, runs the Beat sweeps | `make docker-logs s=celery-worker` |
+| `celery-beat` | | Queues the reminder sweep (60s) and the outbox sweep (300s) | `make docker-logs s=celery-beat` |
+| `flower` | <http://127.0.0.1:5555> | Workers, job history, retries and failures | Browser, log in with `FLOWER_BASIC_AUTH` |
+
+```bash
+make docker-up
+docker compose ps    # all seven services running; api, db, mongo, redis healthy
+make flow-demo       # one task change through every service, checked step by step (~1-2 min)
+```
+
+`make flow-demo` creates its own users, project and task through the API (no `make seed`
+needed) and leaves them in place to inspect. It exits non-zero if any step fails. To walk
+the same flow by hand for a recording, follow
+[`demos/session-05/07-end-to-end-flow/demo.md`](demos/session-05/07-end-to-end-flow/demo.md).
 
 ---
 
@@ -283,6 +315,7 @@ These run on the host against the Redis in `.env`; with `make docker-up`, the `c
 - `make flower` - Starts Flower on `127.0.0.1:${FLOWER_PORT:-5555}`; it asks for a login when `FLOWER_BASIC_AUTH` is set.
 - `make celery-demo` - Scripted Celery jobs demo: success, duplicate delivery, retries, permanent failure, worker offline, A → B → A reassignment.
 - `make beat-demo` - Scripted Beat reminder demo: due-date filtering, overlap lock and dedup. It uses its own lock key and rolls back its rows, so it is safe next to the running `celery-beat`; it prints the Flower URL but does not check Flower.
+- `make flow-demo` - End-to-end demo against the running Docker stack: one task change through the API, cache, events, worker, Beat and Flower. See [Full-stack walkthrough](#full-stack-walkthrough).
 
 #### Task Events (Redis)
 - `make events-pubsub` - Run the Redis Pub/Sub task event consumer until Ctrl+C.

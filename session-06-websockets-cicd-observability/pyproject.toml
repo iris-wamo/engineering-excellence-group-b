@@ -1,7 +1,7 @@
 [project]
 name = "session-06-websockets-cicd-observability"
 version = "0.1.0"
-description = "TaskFlow - Async Programming, Redis Caching & Channeling, Celery Background Jobs & Monitoring"
+description = "TaskFlow - WebSockets, CI/CD & Observability, Backend Capstone"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

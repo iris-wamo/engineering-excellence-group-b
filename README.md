@@ -55,6 +55,19 @@ Move TaskFlow from a basic API into an asynchronous backend workflow. This sessi
 See [`session-05-async-redis-celery/README.md`](session-05-async-redis-celery/README.md) for setup instructions.
 
 
+### Session 06 — WebSockets, CI/CD, Observability, and the Backend Capstone ([`session-06-websockets-cicd-observability/`](session-06-websockets-cicd-observability/))
+
+Close the backend track by delivering real-time updates, enforcing quality automatically, and diagnosing the running system. This session covers:
+
+- Authenticated WebSocket connections with per-project access and real-time task updates fanned out through Redis.
+- A GitHub Actions PR quality gate, tagged image builds, and a staged release and rollback.
+- Structured logs, Prometheus metrics, request tracing, and a Grafana dashboard.
+- Health checks and a reproducible incident simulation with a written incident report.
+- The Sessions 1–6 leadership showcase: slide deck, demo index, and scorecard.
+
+See [`session-06-websockets-cicd-observability/README.md`](session-06-websockets-cicd-observability/README.md) for setup instructions.
+
+
 ## Forking a new session
 
 Each session is a standalone copy of the previous one. When you fork `session-NN` into the next session directory:

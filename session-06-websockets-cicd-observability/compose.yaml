@@ -11,6 +11,9 @@ services:
 
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # Creates <POSTGRES_DB>_test for the test suite. Runs only when pgdata is empty,
+      # so an existing volume needs `docker compose down -v` (or a manual CREATE DATABASE).
+      - ./docker/postgres/init-test-db.sh:/docker-entrypoint-initdb.d/10-create-test-db.sh:ro
 
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-taskflow} -d ${POSTGRES_DB:-taskflow}"]

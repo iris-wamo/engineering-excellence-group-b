@@ -67,9 +67,9 @@ make install
 make docker-build
 make docker-up
 
-# 4. Load demo data and create the test database used by `make test`
+# 4. Load demo data. The test database used by `make test` (taskflow_test) is created
+#    automatically when the db container first starts (docker/postgres/init-test-db.sh)
 make seed
-docker compose exec db sh -c 'createdb -U "$POSTGRES_USER" "${POSTGRES_DB}_test"'
 ```
 
 - API docs: <http://localhost:8000/docs>
@@ -186,6 +186,11 @@ This creates a dedicated login role (`taskflow`), an empty database (`taskflow`)
 it, and a second `taskflow_test` database used by the test suite (see
 [Running tests](#running-tests)). Do this **once**. The command differs slightly per OS
 because of how you reach the Postgres admin account.
+
+> Using the Docker Compose database instead? Skip this step: `docker compose up` creates both
+> databases on first start (`docker/postgres/init-test-db.sh`). If your `pgdata` volume already
+> exists, the script won't re-run; use `docker compose down -v` (deletes the data) or the
+> `CREATE DATABASE taskflow_test` command below.
 
 **macOS:**
 
@@ -344,7 +349,7 @@ real services, not SQLite or fakes, so the schema and constraints (enums, unique
 etc.) are exercised the same way they are in production:
 
 - **PostgreSQL**: the `DATABASE_URL` database name plus `_test` (e.g. `taskflow_test`, created
-  in Step 3 or in the Docker quick start). The schema is created once per run; each test runs
+  in Step 3, or automatically by Docker Compose on first start). The schema is created once per run; each test runs
   inside a transaction that is rolled back, so tests never see each other's rows.
 - **MongoDB**: the `MONGO_DB` name plus `_test`.
 - **Redis**: logical database 15 on the `REDIS_URL` server, emptied around each test that uses

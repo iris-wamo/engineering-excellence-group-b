@@ -1,0 +1,141 @@
+name: Session quality gate
+
+# Runs on every PR (no path filter) so the required checks below always report a
+# status. A path filter would leave them "waiting" forever on PRs that don't touch
+# the session. Instead, the `changes` job decides whether the heavy jobs run; a job
+# skipped through `if:` counts as passing for branch protection.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # UPDATE THIS when a new session is forked from the previous one
+  # (see "Forking a new session" in the root README).
+  CURRENT_SESSION: session-06-websockets-cicd-observability
+
+jobs:
+  changes:
+    name: Detect session changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.detect.outputs.run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The PR merge commit and its first parent (the base branch) are enough to diff.
+          fetch-depth: 2
+
+      - name: Check the current session exists
+        run: |
+          if [ ! -f "$CURRENT_SESSION/pyproject.toml" ]; then
+            echo "::error title=Unknown session::$CURRENT_SESSION/pyproject.toml not found. Update CURRENT_SESSION in .github/workflows/session-quality.yml."
+            exit 1
+          fi
+
+      - name: Decide whether the quality checks need to run
+        id: detect
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != "pull_request" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed=$(git diff --name-only HEAD^1 HEAD)
+          echo "$changed"
+          if echo "$changed" | grep -qE "^($CURRENT_SESSION/|\.github/workflows/session-quality\.yml$)"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No changes in $CURRENT_SESSION; skipping the quality checks."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  lint:
+    name: Lint and type check
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    # Fail fast instead of GitHub's 6-hour default if something hangs.
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: ${{ env.CURRENT_SESSION }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+          cache-dependency-glob: ${{ env.CURRENT_SESSION }}/uv.lock
+
+      # --frozen installs exactly what uv.lock says (ruff, mypy and pytest versions
+      # included) and fails if pyproject.toml and uv.lock disagree.
+      - name: Install locked dependencies
+        run: uv sync --frozen
+
+      - name: Ruff lint
+        run: uv run ruff check .
+
+      - name: Ruff format check
+        run: uv run ruff format --check .
+
+      - name: Mypy
+        run: uv run mypy .
+
+  test:
+    name: Tests
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    # The suite takes ~1.5 min locally; this also bounds `docker compose up --wait`,
+    # which has no timeout of its own if a service never becomes healthy.
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: ${{ env.CURRENT_SESSION }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+          cache-dependency-glob: ${{ env.CURRENT_SESSION }}/uv.lock
+
+      - name: Install locked dependencies
+        run: uv sync --frozen
+
+      # Same setup as local development (`make install`): .env.example already points at
+      # the ports compose.yaml / compose.override.yaml publish on localhost.
+      - name: Create .env from .env.example
+        run: cp .env.example .env
+
+      # Real Postgres, MongoDB and Redis from compose.yaml (images, health checks and the
+      # <db>_test database all come from there). --wait blocks until they are healthy.
+      - name: Start Postgres, MongoDB and Redis
+        run: docker compose up -d --wait db mongo redis
+
+      # The tests build their schema with create_all, not Alembic, so they can't catch a
+      # broken migration or a model change without one. These run against the app
+      # database (`taskflow`), which is empty on a fresh runner.
+      - name: Apply migrations
+        run: uv run alembic upgrade head
+
+      - name: Check models match migrations
+        run: uv run alembic check
+
+      # Unit, integration and auth tests (including the negative authorization tests).
+      # Future WebSocket rejection tests under tests/ are picked up automatically.
+      - name: Run tests
+        run: uv run pytest
+
+      - name: Show service logs on failure
+        if: failure()
+        run: docker compose logs --no-color db mongo redis

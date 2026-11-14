@@ -187,6 +187,11 @@ it, and a second `taskflow_test` database used by the test suite (see
 [Running tests](#running-tests)). Do this **once**. The command differs slightly per OS
 because of how you reach the Postgres admin account.
 
+> Using the Docker Compose database instead? Skip this step: `docker compose up` creates both
+> databases on first start (`docker/postgres/init-test-db.sh`). If your `pgdata` volume already
+> exists, the script won't re-run; use `docker compose down -v` (deletes the data) or the
+> `CREATE DATABASE taskflow_test` command below.
+
 **macOS:**
 
 ```bash

@@ -2,6 +2,10 @@
 docker-db-shell: ## Open a psql shell inside the Postgres container (uses its POSTGRES_USER / POSTGRES_DB)
 	docker compose exec db sh -c 'psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"'
 
+.PHONY: docker-test-db
+docker-test-db: ## Create the test database (<POSTGRES_DB>_test) in the running Postgres container if it is missing
+	docker compose exec db /docker-entrypoint-initdb.d/10-create-test-db.sh
+
 .PHONY: docker-build
 docker-build: ## Build the Docker images for every Compose service with a build section
 	docker compose build

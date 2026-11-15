@@ -1,0 +1,25 @@
+# Single-process Tempo for local tracing. Spans arrive over OTLP from the api and the worker;
+# Grafana queries them on port 3200. Blocks live in the container (/tmp), so traces are lost
+# when it is recreated, which is fine for a local stack.
+stream_over_http_enabled: true
+
+server:
+  http_listen_port: 3200
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        # Listen on all interfaces: the default is localhost, which other containers can't reach
+        http:
+          endpoint: 0.0.0.0:4318
+        grpc:
+          endpoint: 0.0.0.0:4317
+
+storage:
+  trace:
+    backend: local
+    wal:
+      path: /tmp/tempo/wal
+    local:
+      path: /tmp/tempo/blocks

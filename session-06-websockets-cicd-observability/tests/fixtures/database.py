@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 from pymongo import MongoClient
 from sqlalchemy import text
+from sqlalchemy.ext import asyncio as sqlalchemy_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import settings
@@ -99,7 +100,8 @@ async def rolled_back_session(database_url: str) -> AsyncGenerator[AsyncSession,
     that commits still leaves nothing behind. Kept separate from the `db_session`
     fixture so tests/integration/test_db_session_isolation.py can check the rollback.
     """
-    engine = create_async_engine(database_url)
+    # Through the module, so the tracing instrumentation's wrapper applies (as in the app)
+    engine = sqlalchemy_asyncio.create_async_engine(database_url)
     connection = await engine.connect()
     transaction = await connection.begin()
     try:

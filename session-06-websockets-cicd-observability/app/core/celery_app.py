@@ -13,6 +13,7 @@ from celery.signals import (
     task_prerun,
     task_retry,
     worker_init,
+    worker_process_init,
 )
 from taskflow_shared.logging import (
     JsonFormatter,
@@ -24,6 +25,7 @@ from taskflow_shared.logging import (
 
 from app.core.config import settings
 from app.observability import celery as task_observability
+from app.observability.tracing import instrument_worker
 
 # Message header that carries the API request's X-Request-ID to the worker
 REQUEST_ID_HEADER = "request_id"
@@ -115,6 +117,11 @@ def _clear_request_id(
             task_id, task.name, state, task.request.retries or 0
         )
     set_request_id(caller_request_id)
+
+
+@worker_process_init.connect
+def _trace_pool_process(**_: Any) -> None:
+    instrument_worker()
 
 
 @worker_init.connect

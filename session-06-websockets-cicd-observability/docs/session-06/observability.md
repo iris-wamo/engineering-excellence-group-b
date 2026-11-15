@@ -1,7 +1,8 @@
 # Observability
 
-How TaskFlow records what happened (logs) and how much of it happened (metrics). Tracing and the
-Grafana dashboard come in #126, health checks and the incident simulation in #127.
+How TaskFlow records what happened (logs), how much of it happened (metrics) and where the time
+went (traces), and where to look at all three. Health checks and the incident simulation come in
+#127.
 
 ## Overview
 
@@ -11,6 +12,8 @@ Grafana dashboard come in #126, health checks and the incident simulation in #12
 | Task log record | Celery signal handlers (`app/core/celery_app.py` → `app/observability/celery.py`), one per task run | Worker container stdout |
 | API metrics | Same middleware, `prometheus_client` default registry | `GET /metrics` on the API (port 8000) |
 | Worker metrics | Same signal handlers, multiprocess mode | `GET /metrics` on the worker, `127.0.0.1:9808` |
+| Traces | OpenTelemetry in the API and the worker, exported over OTLP | Tempo, viewed in Grafana (Explore > Tempo) |
+| Dashboard | Prometheus scrapes both metrics endpoints | Grafana, <http://127.0.0.1:3000> (TaskFlow overview) |
 
 ## Structured logs
 
@@ -142,6 +145,68 @@ events Flower asks workers to send while it is connected: if Flower is down or r
 that window are never counted. The worker's own counters do not depend on another process being up.
 Both can run side by side.
 
+## Traces
+
+`make docker-up` starts **Tempo**, which receives spans over OTLP (HTTP, port 4318). There is no
+separate tracing UI: traces are viewed and searched in Grafana, under Explore with the Tempo data
+source (search by service, span name or duration with TraceQL, or paste a `trace_id` from a log
+line).
+
+What produces spans:
+
+| Span | From |
+|---|---|
+| `POST /api/v1/tasks/{task_id}/assign` (the request) | `FastAPIInstrumentor` (`app/observability/tracing.py`) |
+| `TaskService.create_task`, `.update_task_status`, `.assign_task` | `@traced` from `taskflow_shared.observability` |
+| One span per SQL statement (`db.statement` attribute) | `SQLAlchemyInstrumentor` |
+| `apply_async/...` in the API, `run/...` in the worker | `CeleryInstrumentor` |
+
+`/metrics`, `/docs` and `/openapi.json` are not traced (scrapes and the container healthcheck).
+
+Setup is `configure_tracing(service_name)` in the shared package. It reads the standard
+`OTEL_EXPORTER_OTLP_ENDPOINT` (set to `http://tempo:4318` for the api and worker in Compose) and
+does nothing when it is unset, so tests and plain local runs don't need a collector. `make run`
+outside Docker can send to the published `127.0.0.1:4318` by exporting that variable.
+
+**Logs and traces are joined by id.** Every JSON log line written inside a span has `trace_id` and
+`span_id`, in the same hex format Grafana shows, so a request record leads to its trace and a trace
+to its log lines.
+
+**Engines are created through `sqlalchemy.ext.asyncio`.** The SQLAlchemy instrumentation works by
+wrapping `sqlalchemy.ext.asyncio.create_async_engine`. Code that did
+`from sqlalchemy.ext.asyncio import create_async_engine` at import time kept the unwrapped function,
+so `app/db/session.py`, `app/tasks/db.py` and the per-test engine call it through the module.
+
+### Across the async boundaries
+
+| Boundary | Same trace? | Why |
+|---|---|---|
+| API request → Celery job (assignment notification) | **Yes** | `CeleryInstrumentor` writes the trace context into the job's message headers when the API queues it, and the worker continues that trace. The worker sets up tracing in `worker_process_init`, after the fork, because the exporter's background thread does not survive forking. |
+| API request → Redis task events (Pub/Sub, Streams) | **No** | The event payload (`TaskEvent`) has no trace context, and the consumers are separate processes. Carrying it would mean adding a `traceparent` field to the event schema and continuing it in the consumers. Not done: the events are fire-and-forget notifications today, and the `request_id` and `task_id` already link them to the request in the logs. |
+| Celery Beat → scheduled jobs | Starts a new trace per run | Nothing upstream to continue. |
+
+## Dashboard
+
+Prometheus (`127.0.0.1:9090`) scrapes `api:8000/metrics` and `celery-worker:9808` every 5 s
+(`docker/prometheus/prometheus.yml`). Grafana (`127.0.0.1:3000`) is provisioned from
+`docker/grafana/`: the Prometheus and Tempo data sources and the **TaskFlow overview** dashboard,
+which is also the home page. Anonymous visitors can view it and use Explore; it is bound to
+localhost only.
+
+| Panel | Query (simplified) |
+|---|---|
+| Requests / s | `sum(rate(taskflow_http_requests_total[1m]))` |
+| 5xx error rate | 5xx requests over all requests, last minute |
+| p95 latency | `histogram_quantile(0.95, …duration_seconds_bucket[5m])` |
+| WebSocket connections | `sum(taskflow_websocket_connections)` (empty until #120 is merged) |
+| Request rate, p95 latency and 4xx/5xx by route | the same, `by (route)` |
+| Celery task runs by outcome | `increase(taskflow_celery_tasks_total[5m])` by task and outcome |
+| Celery task p95 duration | `histogram_quantile(0.95, …task_duration_seconds_bucket[5m])` by task |
+| Scrape targets up | `up` |
+
+To change the dashboard, edit it in Grafana, export the JSON and replace
+`docker/grafana/dashboards/taskflow.json`; provisioned dashboards can't be saved from the UI.
+
 ## Trying it
 
 ```bash
@@ -151,6 +216,8 @@ curl -s localhost:8000/api/v1/projects/999999 > /dev/null
 curl -s localhost:8000/metrics | grep '^taskflow_http_requests_total'
 curl -s 127.0.0.1:9808/metrics | grep '^taskflow_celery_tasks_total'   # after Beat has run once
 docker compose logs api --since 1m | grep '"logger": "app.requests"'
+make load-test                 # 20 clients for 60 s against GET /api/v1/projects
+open http://127.0.0.1:3000     # dashboard; Explore > Tempo for traces
 ```
 
 ## Known limitations

@@ -5,11 +5,14 @@ from fastapi import FastAPI
 from taskflow_shared.logging import RequestIdMiddleware, configure_logging
 
 from app.api.v1 import api_router
+from app.core.config import settings
 from app.core.exceptions import register_exception_handlers
 from app.db.mongo import close_mongo_client, init_mongo_indexes
 from app.db.redis import close_redis_client
+from app.observability.metrics import metrics_endpoint
+from app.observability.middleware import ObservabilityMiddleware
 
-configure_logging()
+configure_logging(level=settings.log_level, style=settings.log_format)
 
 
 @asynccontextmanager
@@ -27,6 +30,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 app = FastAPI(title="session-06-websockets-cicd-observability", lifespan=lifespan)
 
+# Added first so it runs inside RequestIdMiddleware and its records carry the request id
+app.add_middleware(ObservabilityMiddleware)
 app.add_middleware(RequestIdMiddleware)
 register_exception_handlers(app)
 app.include_router(api_router)
+app.add_route("/metrics", metrics_endpoint, include_in_schema=False)

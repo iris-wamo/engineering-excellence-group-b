@@ -8,12 +8,16 @@ from celery.signals import (
     after_setup_logger,
     after_setup_task_logger,
     before_task_publish,
+    task_failure,
     task_postrun,
     task_prerun,
+    task_retry,
+    worker_init,
 )
-from taskflow_shared.logging import RequestIdFilter, get_request_id, set_request_id
+from taskflow_shared.logging import JsonFormatter, RequestIdFilter, get_request_id, set_request_id
 
 from app.core.config import settings
+from app.observability import celery as task_observability
 
 # Message header that carries the API request's X-Request-ID to the worker
 REQUEST_ID_HEADER = "request_id"
@@ -74,22 +78,48 @@ def _attach_request_id(headers: dict[str, Any] | None = None, **_: Any) -> None:
 
 
 @task_prerun.connect
-def _restore_request_id(task: Task | None = None, **_: Any) -> None:
+def _restore_request_id(task_id: str | None = None, task: Task | None = None, **_: Any) -> None:
     """Make the queuing request's id the current request id while the job runs."""
     set_request_id(getattr(task.request, REQUEST_ID_HEADER, None) if task else None)
+    if task_id and task:
+        task_observability.task_started(task_id, task.name)
+
+
+@task_failure.connect
+@task_retry.connect
+def _record_task_error(
+    exception: BaseException | None = None, reason: BaseException | None = None, **_: Any
+) -> None:
+    """task_failure passes the error as `exception`, task_retry as `reason`."""
+    task_observability.task_errored(exception or reason)
 
 
 @task_postrun.connect
-def _clear_request_id(**_: Any) -> None:
+def _clear_request_id(
+    task_id: str | None = None,
+    task: Task | None = None,
+    state: str | None = None,
+    **_: Any,
+) -> None:
+    """Log and count the finished run while its request id is still set, then clear it."""
+    if task_id and task:
+        task_observability.task_finished(task_id, task.name, state, task.request.retries or 0)
     set_request_id(None)
+
+
+@worker_init.connect
+def _serve_worker_metrics(**_: Any) -> None:
+    task_observability.serve_worker_metrics(settings.worker_metrics_port)
 
 
 @after_setup_logger.connect
 @after_setup_task_logger.connect
 def _add_request_id_filter(logger: logging.Logger, **_: Any) -> None:
-    """Fill %(request_id)s in the worker and Beat log formats above."""
+    """Fill %(request_id)s in the worker and Beat log formats above, or log JSON lines."""
     for handler in logger.handlers:
         handler.addFilter(RequestIdFilter())
+        if settings.log_format == "json":
+            handler.setFormatter(JsonFormatter())
 
 
 celery_app.set_default()

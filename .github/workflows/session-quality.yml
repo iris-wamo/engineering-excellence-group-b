@@ -80,10 +80,10 @@ jobs:
           enable-cache: true
           cache-dependency-glob: ${{ env.CURRENT_SESSION }}/uv.lock
 
-      # --frozen installs exactly what uv.lock says (ruff, mypy and pytest versions
-      # included) and fails if pyproject.toml and uv.lock disagree.
+      # --locked installs exactly what uv.lock pins (ruff, mypy and pytest versions
+      # included) and fails if uv.lock is stale relative to pyproject.toml.
       - name: Install locked dependencies
-        run: uv sync --frozen
+        run: uv sync --locked
 
       - name: Ruff lint
         run: uv run ruff check .
@@ -114,7 +114,7 @@ jobs:
           cache-dependency-glob: ${{ env.CURRENT_SESSION }}/uv.lock
 
       - name: Install locked dependencies
-        run: uv sync --frozen
+        run: uv sync --locked
 
       # Same setup as local development (`make install`): .env.example already points at
       # the ports compose.yaml / compose.override.yaml publish on localhost.

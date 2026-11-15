@@ -76,6 +76,7 @@ module = [
     "celery.*",
     "kombu.*",
     "flower.*",
+    "asyncpg.*",
 ]
 ignore_missing_imports = true
 

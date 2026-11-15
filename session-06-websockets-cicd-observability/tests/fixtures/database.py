@@ -65,10 +65,10 @@ def _missing_test_database_message(app_db_name: str) -> str:
     return (
         f'Test database "{app_db_name}_test" does not exist (the DATABASE_URL database name '
         'plus "_test").\n'
-        "  - Docker: with the stack up, run `make docker-test-db`.\n"
-        "  - Native PostgreSQL: create it as in README Step 3.\n"
         "  - Check that POSTGRES_DB matches the database name in DATABASE_URL; the container "
-        "creates <POSTGRES_DB>_test."
+        "creates <POSTGRES_DB>_test.\n"
+        "  - Docker: with the stack up, run `make docker-test-db` (creates <POSTGRES_DB>_test).\n"
+        "  - Native PostgreSQL: create it as in README Step 3."
     )
 
 

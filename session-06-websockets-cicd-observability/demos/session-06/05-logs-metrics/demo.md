@@ -88,7 +88,8 @@ One assignment followed from the API into the worker by its request id (`make fl
 ```
 (This run was before the `celery_task_id` rename; the second line's `task_id` is the Celery job id.)
 
-A failed job (wrong arguments) and a retried one (Postgres stopped for 2 s, then started):
+A failed job (wrong arguments) and a retried one (Postgres stopped for 2 s, then started). These were
+captured before error categories were made snake_case everywhere; `TypeError` is now `type_error`:
 ```text
 taskflow_celery_tasks_total{outcome="failed",task="app.tasks.notification_tasks.send_task_assignment_notification"} 1.0
 taskflow_celery_tasks_total{outcome="retried",task="app.tasks.notification_tasks.send_task_assignment_notification"} 2.0

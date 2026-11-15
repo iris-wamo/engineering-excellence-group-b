@@ -48,8 +48,14 @@ class Settings(BaseAppSettings):
     # "text" keeps the readable session-05 format for local runs.
     log_format: Literal["json", "text"] = "json"
     log_level: str = "INFO"
-    # Port the Celery worker serves its Prometheus metrics on (the API serves /metrics itself)
+    # Where the Celery worker serves its Prometheus metrics (the API serves /metrics itself).
+    # Loopback by default; Compose sets 0.0.0.0 inside the container and publishes it on
+    # 127.0.0.1 only.
+    worker_metrics_addr: str = "127.0.0.1"
     worker_metrics_port: int = 9808
+    # When set, GET /metrics requires "Authorization: Bearer <token>". Set it wherever the
+    # API port is reachable from outside the internal network.
+    metrics_token: str | None = None
 
     @property
     def due_reminder_lock_ttl_seconds(self) -> int:

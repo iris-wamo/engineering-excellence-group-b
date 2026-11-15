@@ -106,8 +106,9 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
       # Pool processes write their metrics here and the main process serves the sum
-      # (see app/observability/celery.py)
+      # (see app/observability/celery.py). One directory per worker; never share it.
       PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus-worker
+      WORKER_METRICS_ADDR: 0.0.0.0
 
     depends_on:
       db:

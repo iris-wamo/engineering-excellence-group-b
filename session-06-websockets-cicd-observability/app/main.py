@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from taskflow_shared.logging import RequestIdMiddleware, configure_logging
+from taskflow_shared.observability import ObservabilityMiddleware
 
 from app.api.v1 import api_router
 from app.core.config import settings
@@ -10,7 +11,6 @@ from app.core.exceptions import register_exception_handlers
 from app.db.mongo import close_mongo_client, init_mongo_indexes
 from app.db.redis import close_redis_client
 from app.observability.metrics import metrics_endpoint
-from app.observability.middleware import ObservabilityMiddleware
 
 configure_logging(level=settings.log_level, style=settings.log_format)
 

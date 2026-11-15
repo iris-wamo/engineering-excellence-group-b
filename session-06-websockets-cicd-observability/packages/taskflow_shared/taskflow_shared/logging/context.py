@@ -41,6 +41,16 @@ def bind_log_fields(**fields: Any) -> None:
         current.update({key: value for key, value in fields.items() if value is not None})
 
 
+def current_log_context() -> dict[str, Any] | None:
+    """The current fields dict itself (not a copy), to hand back to restore_log_context."""
+    return _log_fields_ctx_var.get()
+
+
+def restore_log_context(fields: dict[str, Any] | None) -> None:
+    """Put back a context saved with current_log_context, e.g. after a task run in-process."""
+    _log_fields_ctx_var.set(fields)
+
+
 def get_log_fields() -> dict[str, Any]:
     """Return a copy of the fields bound to the current request or job."""
     current = _log_fields_ctx_var.get()

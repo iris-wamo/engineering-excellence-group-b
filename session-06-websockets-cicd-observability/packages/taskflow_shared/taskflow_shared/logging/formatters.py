@@ -66,6 +66,17 @@ class RequestIdFilter(logging.Filter):
         return True
 
 
+class RedactingFormatter(logging.Formatter):
+    """Wraps a text formatter so credentials are masked in the message and the traceback."""
+
+    def __init__(self, inner: logging.Formatter) -> None:
+        super().__init__()
+        self.inner = inner
+
+    def format(self, record: logging.LogRecord) -> str:
+        return redact_text(self.inner.format(record))
+
+
 class JsonFormatter(logging.Formatter):
     """One JSON object per line: time, level, logger, message, request id and bound fields.
 
@@ -108,10 +119,11 @@ def configure_logging(
     and its access log is turned off because the app writes its own request records.
     """
     root = logging.getLogger()
-    root.setLevel(level)
+    root.setLevel(level.upper() if isinstance(level, str) else level)
     handler = logging.StreamHandler()
     handler.addFilter(RequestIdFilter())
-    handler.setFormatter(JsonFormatter() if style == "json" else logging.Formatter(log_format))
+    text_formatter = RedactingFormatter(logging.Formatter(log_format))
+    handler.setFormatter(JsonFormatter() if style == "json" else text_formatter)
     root.handlers = [handler]
 
     for name in ("uvicorn", "uvicorn.error"):

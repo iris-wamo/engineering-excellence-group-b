@@ -7,7 +7,7 @@ Grafana dashboard come in #126, health checks and the incident simulation in #12
 
 | Signal | Where it is produced | Where to read it |
 |---|---|---|
-| Request log record | `ObservabilityMiddleware` (`app/observability/middleware.py`), one per HTTP request | API container stdout |
+| Request log record | `ObservabilityMiddleware` (`taskflow_shared/observability/`), one per HTTP request | API container stdout |
 | Task log record | Celery signal handlers (`app/core/celery_app.py` → `app/observability/celery.py`), one per task run | Worker container stdout |
 | API metrics | Same middleware, `prometheus_client` default registry | `GET /metrics` on the API (port 8000) |
 | Worker metrics | Same signal handlers, multiprocess mode | `GET /metrics` on the worker, `127.0.0.1:9808` |
@@ -27,13 +27,23 @@ session-05 text format for local reading; both carry the request id.
 | `outcome` | `success`, `client_error`, `server_error` | `succeeded`, `failed`, `retried` | middleware / signal handler |
 | `status` | HTTP status | | middleware |
 | `duration_ms` | ✓ | ✓ | middleware / signal handler |
-| `error_category` | error envelope code, lower case (`not_found`, `validation_error`, `internal_server_error`) | exception class (`ConnectionError`) | exception handlers / `task_failure`, `task_retry` |
+| `error_category` | ✓ | ✓ | exception handlers, middleware / `task_failure`, `task_retry` |
 | `user_id` | when authenticated | | `get_current_user`, `get_optional_current_user` |
 | `workspace_id` | when resolved | | `get_current_workspace_id` |
 | `project_id`, `task_id` | from the path, when present | | middleware |
 | `task_name`, `celery_task_id` | | ✓ (named so it never clashes with the TaskFlow `task_id`) | signal handler |
 | `retries` | | ✓ | signal handler |
-| `exc_type`, `exc_info` | on `logger.exception` | on `logger.exception` | `JsonFormatter` |
+| `exc_type`, `exc_info` | on an unhandled error (the request record carries the traceback) | on `logger.exception` | `JsonFormatter` |
+
+`error_category` follows one rule everywhere (`taskflow_shared.logging.error_category`): the error
+envelope code for app errors (`not_found`, `validation_error`), otherwise the exception class in
+snake_case (`runtime_error`, `connection_error`, `gaierror`). For a Celery retry it is the error
+that caused the retry, not Celery's `Retry` wrapper.
+
+An unhandled error is logged once, on the request's own record, so its traceback carries the
+request's `user_id` and `workspace_id`. The catch-all error handler sees the error is already
+logged and does not log it again. If the error happens after the response started (a streamed
+body), the record keeps the status the client received and is marked `server_error`.
 
 Any other log call in the app picks up the same bound fields, so a warning logged deep in a
 service during a request also has `user_id`, `workspace_id` and `request_id`.
@@ -54,6 +64,10 @@ handlers must format synchronously (a `StreamHandler` does; a `QueueHandler` wou
 - `Bearer ...` values and anything shaped like a JWT are masked inside the message text too.
 - Request and response bodies are not logged at all. Redacting known keys is a safety net, not a
   reason to start logging payloads.
+- Celery's own "received" and "succeeded" records carry the task's arguments and return value; the
+  worker replaces them with `[omitted]` in both the extra fields and the message.
+- Masking applies to both formats: `LOG_FORMAT=text` wraps the text formatter (the worker's Celery
+  formatter included), so the message and traceback are masked there too.
 
 Text redaction is best effort: a secret with no recognisable key or shape (a password pasted into
 a task title) would still be logged. The protection that holds is not logging bodies.
@@ -91,11 +105,16 @@ estimated in the range the app actually runs in.
 #### Getting the route template
 
 FastAPI 0.139 keeps included routers nested: the matched route only knows its path inside its own
-router (`/projects/{project_id}`), not the `/api/v1` prefix. The middleware rebuilds the prefix by
-filling the route's template with the path params and removing that from the end of the request
-path. This works because router prefixes here are static. FastAPI also does not record plain routes
-like `/docs` in the scope, so those are found by their endpoint. FastAPI does keep the full path
-under a private scope key; it was not used because private keys can change in any release.
+router (`/projects/{project_id}`), not the `/api/v1` prefix. The full template, prefix params
+included, is on FastAPI's effective route context in the scope, which the middleware uses
+(converters such as `{item_id:int}` are written as `{item_id}`). It is a private scope entry; if a
+FastAPI upgrade removes it, labels fall back to the route's own path and lose the prefix, rather
+than growing without bound. Plain routes like `/docs` have no route context and are found by
+their endpoint.
+
+An earlier version rebuilt the prefix by subtracting the filled-in route from the request path.
+Review showed it broke on prefixes with path params (every ID became a label) and on converted
+params, so it was replaced.
 
 ### Why the worker serves its own metrics
 
@@ -103,10 +122,14 @@ The Celery worker runs tasks in forked child processes, each with its own memory
 would count only its own runs, and no single process could report the total. The worker uses
 `prometheus_client` multiprocess mode instead:
 
-- `PROMETHEUS_MULTIPROC_DIR` is set for the worker (Compose: `/tmp/prometheus-worker`;
-  `make celery-worker`: `/tmp/taskflow-worker-metrics`). Children write their values to files there.
+- `PROMETHEUS_MULTIPROC_DIR` is set for the worker (Compose: `/tmp/prometheus-worker` in the
+  worker's own container; `make celery-worker`: a fresh `mktemp -d` directory per run). Children
+  write their values to files there. The directory must not be shared: a second worker would clear
+  the first one's files.
 - On `worker_init` the main process clears files left by an earlier run, then serves the sum of all
-  files on `WORKER_METRICS_PORT` (default 9808).
+  files on `WORKER_METRICS_ADDR:WORKER_METRICS_PORT` (default `127.0.0.1:9808`). Compose sets the
+  address to `0.0.0.0` inside the container so Prometheus can reach it, and publishes the port on
+  the host's `127.0.0.1` only.
 - If the variable is not set, the worker logs a warning and serves nothing, rather than serving
   numbers that silently miss the children's work.
 
@@ -132,14 +155,13 @@ docker compose logs api --since 1m | grep '"logger": "app.requests"'
 
 ## Known limitations
 
-- `/metrics` is unauthenticated. It is meant for Prometheus on the internal network; in a real
-  deployment it should not be reachable from outside.
+- `/metrics` is open unless `METRICS_TOKEN` is set; then Prometheus must send it as a bearer token
+  (`authorization` in its scrape config). Set it wherever the API port is reachable from outside
+  the internal network. Locally it stays open for convenience.
 - The API container's healthcheck requests `/docs` every 30 s, which shows up as request records
   and in the `/docs` series. A dedicated `/health` endpoint (#127) should replace it and can be
   left out of the request logs.
 - The worker's "Serving worker metrics" info line is logged before Celery has configured logging,
   so it does not appear. Check the endpoint itself instead.
 - Beat does not run tasks, so it has no metrics endpoint.
-- Celery's own "Task ... succeeded" line (`celery.app.trace`) includes the task's arguments and
-  return value as strings. TaskFlow's tasks pass IDs only, but a task that took sensitive arguments
-  would leak them there, because redaction only sees dict keys, not text inside a repr.
+- `LOG_LEVEL` (any case) sets the API's level. The worker's level comes from its `-l` flag.

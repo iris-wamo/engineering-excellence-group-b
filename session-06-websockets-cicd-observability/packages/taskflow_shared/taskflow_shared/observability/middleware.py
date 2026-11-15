@@ -1,13 +1,20 @@
 """ASGI middleware that writes one log record and one set of metrics per HTTP request."""
 
 import logging
+import re
 import time
 from typing import Any
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
-from taskflow_shared.logging import bind_log_fields, clear_log_context, start_log_context
 
-from app.observability.metrics import (
+from taskflow_shared.logging import (
+    bind_log_fields,
+    clear_log_context,
+    error_category,
+    mark_logged,
+    start_log_context,
+)
+from taskflow_shared.observability.metrics import (
     HTTP_REQUEST_DURATION,
     HTTP_REQUESTS,
     UNMATCHED_ROUTE,
@@ -19,30 +26,26 @@ logger = logging.getLogger("app.requests")
 # Path parameters worth putting on the request's log record
 LOGGED_PATH_PARAMS = ("project_id", "task_id")
 
+# "{item_id:int}" -> "{item_id}", so the label matches the route as written
+_CONVERTOR = re.compile(r"\{(\w+):[^}]+\}")
+
 
 def route_template(scope: Scope) -> str:
     """The matched route's full path template, e.g. /api/v1/tasks/{task_id}.
 
     FastAPI keeps included routers nested, so the matched route only knows its path inside
-    its own router (/tasks/{task_id}). The outer prefix (/api/v1) is what is left of the
-    request path once the route's own part, filled in with the path params, is removed.
-    Router prefixes here are static; a prefix with its own path param would need more.
+    its own router (/tasks/{task_id}). The full path is on FastAPI's effective route context,
+    a private scope entry; if a FastAPI upgrade drops it, the label falls back to the route's
+    own path. Plain routes (/docs, /metrics) have neither and are found by their endpoint.
     """
-    route = scope.get("route") or _top_level_route(scope)
-    path_format = getattr(route, "path_format", None)
-    if not isinstance(path_format, str):
-        return UNMATCHED_ROUTE
-    try:
-        concrete = path_format.format(**(scope.get("path_params") or {}))
-    except (KeyError, IndexError):
-        return path_format
-    path: str = scope.get("path", "")
-    prefix = path[: -len(concrete)] if concrete and path.endswith(concrete) else ""
-    return prefix + path_format
+    context = (scope.get("fastapi") or {}).get("effective_route_context")
+    path = getattr(context, "path", None) or getattr(
+        scope.get("route") or _top_level_route(scope), "path_format", None
+    )
+    return _CONVERTOR.sub(r"{\1}", path) if isinstance(path, str) and path else UNMATCHED_ROUTE
 
 
 def _top_level_route(scope: Scope) -> Any:
-    """FastAPI records the matched route only for API routes; find plain ones by endpoint."""
     endpoint = scope.get("endpoint")
     if endpoint is None:
         return None
@@ -69,7 +72,7 @@ class ObservabilityMiddleware:
     """Times each request, records its metrics, and logs it with the fields bound on the way.
 
     A pure ASGI middleware rather than BaseHTTPMiddleware so it sees the matched route in the
-    scope after the app runs, and records unhandled exceptions as 500s before re-raising them.
+    scope after the app runs, and records unhandled exceptions before re-raising them.
     """
 
     def __init__(self, app: ASGIApp, skip_paths: frozenset[str] = frozenset({"/metrics"})):
@@ -82,7 +85,8 @@ class ObservabilityMiddleware:
             return
 
         start_log_context()
-        status_code = 500
+        status_code: int | None = None
+        error: Exception | None = None
         started = time.perf_counter()
 
         async def send_with_status(message: Message) -> None:
@@ -93,15 +97,21 @@ class ObservabilityMiddleware:
 
         try:
             await self.app(scope, receive, send_with_status)
-        except Exception:
-            status_code = 500
-            bind_log_fields(error_category="internal_server_error")
+        except Exception as exc:
+            error = exc
+            bind_log_fields(error_category=error_category(exc))
+            # The traceback goes on this record, with the request's fields; the outer
+            # catch-all handler sees the mark and does not log it again.
+            mark_logged(exc)
             raise
         finally:
-            self._record(scope, status_code, time.perf_counter() - started)
+            # A failure after the response started keeps the status the client received
+            self._record(scope, status_code or 500, time.perf_counter() - started, error)
             clear_log_context()
 
-    def _record(self, scope: Scope, status_code: int, duration: float) -> None:
+    def _record(
+        self, scope: Scope, status_code: int, duration: float, error: Exception | None
+    ) -> None:
         method = method_label(scope["method"])
         route = route_template(scope)
         HTTP_REQUESTS.labels(method, route, str(status_code)).inc()
@@ -109,13 +119,14 @@ class ObservabilityMiddleware:
 
         path_params: dict[str, Any] = scope.get("path_params") or {}
         bind_log_fields(**{name: _id_value(path_params.get(name)) for name in LOGGED_PATH_PARAMS})
-        outcome = outcome_for(status_code)
+        outcome = "server_error" if error is not None else outcome_for(status_code)
         logger.log(
             logging.ERROR if outcome == "server_error" else logging.INFO,
             "%s %s %s",
             method,
             route,
             status_code,
+            exc_info=error,
             extra={
                 "operation": f"{method} {route}",
                 "outcome": outcome,

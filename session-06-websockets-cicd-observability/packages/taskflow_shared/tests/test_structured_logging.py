@@ -6,12 +6,17 @@ import sys
 from collections.abc import Iterator
 
 import pytest
+from taskflow_shared.errors import NotFoundError
 from taskflow_shared.logging import (
     JsonFormatter,
+    RedactingFormatter,
+    already_logged,
     bind_log_fields,
     clear_log_context,
     configure_logging,
+    error_category,
     get_log_fields,
+    mark_logged,
     redact,
     set_request_id,
     start_log_context,
@@ -143,3 +148,51 @@ def test_configure_logging_json_style_uses_the_json_formatter() -> None:
     finally:
         configure_logging()
         logging.getLogger("uvicorn.access").disabled = False
+
+
+def test_text_format_masks_credentials_in_message_and_traceback() -> None:
+    formatter = RedactingFormatter(logging.Formatter("%(message)s"))
+    try:
+        raise ValueError("header was Bearer abc.def")
+    except ValueError:
+        record = logging.LogRecord(
+            "app.test", logging.ERROR, __file__, 1, "token Bearer xyz", None, sys.exc_info()
+        )
+
+    output = formatter.format(record)
+
+    assert "xyz" not in output and "abc.def" not in output
+    assert REDACTED in output
+
+
+def test_configure_logging_accepts_lower_case_level_names() -> None:
+    configure_logging(level="debug")
+    try:
+        assert logging.getLogger().level == logging.DEBUG
+    finally:
+        configure_logging()
+
+
+@pytest.mark.parametrize(
+    ("exc", "category"),
+    [
+        (NotFoundError("missing"), "not_found"),
+        (ConnectionError(), "connection_error"),
+        (TimeoutError(), "timeout_error"),
+        (type("HTTPStatusError", (Exception,), {})(), "http_status_error"),
+        (type("gaierror", (Exception,), {})(), "gaierror"),
+    ],
+)
+def test_error_category_is_the_code_or_the_snake_case_class_name(
+    exc: BaseException, category: str
+) -> None:
+    assert error_category(exc) == category
+
+
+def test_exceptions_can_be_marked_as_logged() -> None:
+    exc = RuntimeError()
+    assert not already_logged(exc)
+
+    mark_logged(exc)
+
+    assert already_logged(exc)

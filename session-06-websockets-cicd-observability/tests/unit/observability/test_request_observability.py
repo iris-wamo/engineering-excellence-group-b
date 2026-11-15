@@ -11,9 +11,10 @@ from httpx import ASGITransport, AsyncClient
 from prometheus_client import REGISTRY
 from taskflow_shared.errors.handlers import register_exception_handlers
 from taskflow_shared.logging import JsonFormatter, bind_log_fields
+from taskflow_shared.observability import UNMATCHED_ROUTE, ObservabilityMiddleware
 
-from app.observability.metrics import UNMATCHED_ROUTE, metrics_endpoint
-from app.observability.middleware import ObservabilityMiddleware
+from app.core.config import settings
+from app.observability.metrics import metrics_endpoint
 
 TASK_ROUTE = "/projects/{project_id}/tasks/{task_id}"
 
@@ -115,17 +116,27 @@ async def test_routes_in_nested_routers_keep_their_full_prefix(request_logs: Jso
     async def list_projects() -> list[int]:
         return []
 
+    # A prefix with its own path param, and a route with a convertor
+    workspaces = APIRouter(prefix="/workspaces/{workspace_id}")
+
+    @workspaces.get("/items/{item_id:int}")
+    async def get_item(workspace_id: int, item_id: int) -> dict[str, int]:
+        return {"item_id": item_id}
+
     outer.include_router(inner)
+    outer.include_router(workspaces)
     app = FastAPI()
     app.add_middleware(ObservabilityMiddleware)
     app.include_router(outer)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         await client.get("/api/v9/projects/5")
         await client.get("/api/v9/projects")
+        await client.get("/api/v9/workspaces/3/items/007")
 
     assert [entry["operation"] for entry in request_logs.entries] == [
         "GET /api/v9/projects/{project_id}",
         "GET /api/v9/projects",
+        "GET /api/v9/workspaces/{workspace_id}/items/{item_id}",
     ]
 
 
@@ -158,19 +169,63 @@ async def test_handled_error_is_a_client_error_with_its_category(
     assert entry["level"] == "INFO"
 
 
-async def test_unhandled_exception_is_counted_and_logged_as_a_server_error(
-    client: AsyncClient, request_logs: JsonLines
+async def test_unhandled_exception_is_counted_and_logged_once_with_its_traceback(
+    client: AsyncClient, request_logs: JsonLines, caplog: pytest.LogCaptureFixture
 ) -> None:
     before = _requests("GET", "/boom", "500")
 
-    response = await client.get("/boom")
+    with caplog.at_level(logging.ERROR, logger="taskflow_shared.errors.handlers"):
+        response = await client.get("/boom")
 
     assert response.status_code == 500
+    assert response.json()["error"]["code"] == "INTERNAL_SERVER_ERROR"
     assert _requests("GET", "/boom", "500") == before + 1
     [entry] = request_logs.entries
     assert entry["outcome"] == "server_error"
-    assert entry["error_category"] == "internal_server_error"
+    assert entry["error_category"] == "runtime_error"
     assert entry["level"] == "ERROR"
+    assert entry["exc_type"] == "RuntimeError"
+    # The catch-all handler does not log the same traceback a second time
+    assert [r for r in caplog.records if r.name == "taskflow_shared.errors.handlers"] == []
+
+
+async def test_error_after_the_response_started_keeps_the_sent_status(
+    request_logs: JsonLines,
+) -> None:
+    async def streams_then_fails(scope: Any, receive: Any, send: Any) -> None:
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        raise RuntimeError("broke mid-body")
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.disconnect"}
+
+    async def ignore(message: Any) -> None:
+        return None
+
+    scope = {"type": "http", "method": "GET", "path": "/stream", "headers": []}
+    before = _requests("GET", UNMATCHED_ROUTE, "200")
+
+    with pytest.raises(RuntimeError):
+        await ObservabilityMiddleware(streams_then_fails)(scope, receive, ignore)
+
+    assert _requests("GET", UNMATCHED_ROUTE, "200") == before + 1
+    [entry] = request_logs.entries
+    assert entry["status"] == 200
+    assert entry["outcome"] == "server_error"
+    assert entry["level"] == "ERROR"
+
+
+async def test_metrics_token_is_required_when_configured(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "metrics_token", "scrape-secret")
+
+    missing = await client.get("/metrics")
+    wrong = await client.get("/metrics", headers={"Authorization": "Bearer nope"})
+    right = await client.get("/metrics", headers={"Authorization": "Bearer scrape-secret"})
+
+    assert (missing.status_code, wrong.status_code, right.status_code) == (401, 401, 200)
+    assert "taskflow_http_requests_total" in right.text
 
 
 async def test_unexpected_methods_share_one_method_label(client: AsyncClient) -> None:

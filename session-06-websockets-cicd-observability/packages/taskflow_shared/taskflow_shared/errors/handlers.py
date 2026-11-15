@@ -13,13 +13,14 @@ from taskflow_shared.contracts.constants import HEADER_REQUEST_ID
 from taskflow_shared.errors.exceptions import AppError
 from taskflow_shared.errors.schemas import ErrorBody, ErrorDetail, ErrorResponse
 from taskflow_shared.logging.context import bind_log_fields, get_request_id
+from taskflow_shared.logging.exceptions import already_logged, error_category
 
 logger = logging.getLogger(__name__)
 
 
 async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
     """Handle domain AppError instances and return standard envelope."""
-    bind_log_fields(error_category=exc.code.lower())
+    bind_log_fields(error_category=error_category(exc))
     details = [
         ErrorDetail(field=d.get("field"), message=d.get("message", ""))
         for d in exc.details
@@ -141,7 +142,8 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException) 
 
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Catch-all handler for unhandled exceptions."""
-    logger.exception("Unhandled exception: %s", exc)
+    if not already_logged(exc):
+        logger.exception("Unhandled exception: %s", exc)
     body = ErrorResponse(
         error=ErrorBody(
             code="INTERNAL_SERVER_ERROR",

@@ -9,7 +9,15 @@ from typing import Any
 import pytest
 from celery.exceptions import Retry
 from prometheus_client import REGISTRY
-from taskflow_shared.logging import JsonFormatter, get_log_fields, set_request_id
+from taskflow_shared.logging import (
+    JsonFormatter,
+    bind_log_fields,
+    clear_log_context,
+    get_log_fields,
+    get_request_id,
+    set_request_id,
+    start_log_context,
+)
 
 from app.core.celery_app import _clear_request_id, _record_task_error, _restore_request_id
 from app.observability import celery as task_observability
@@ -98,7 +106,7 @@ def test_failure_log_names_the_error_category(task_logs: JsonLines) -> None:
 
     [entry] = task_logs.entries
     assert entry["outcome"] == "failed"
-    assert entry["error_category"] == "ConnectionError"
+    assert entry["error_category"] == "connection_error"
     assert entry["level"] == "ERROR"
 
 
@@ -110,7 +118,7 @@ def test_retry_reason_is_recorded_as_the_error_category(task_logs: JsonLines) ->
 
     [entry] = task_logs.entries
     assert entry["outcome"] == "retried"
-    assert entry["error_category"] == "TimeoutError"
+    assert entry["error_category"] == "timeout_error"
 
 
 def test_log_fields_do_not_leak_into_the_next_run(task_logs: JsonLines) -> None:
@@ -123,12 +131,14 @@ def test_worker_metrics_are_not_served_without_a_multiprocess_dir(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("PROMETHEUS_MULTIPROC_DIR", raising=False)
-    started: list[int] = []
+    started: list[tuple[int, str]] = []
     monkeypatch.setattr(
-        task_observability, "start_http_server", lambda port, **_: started.append(port)
+        task_observability,
+        "start_http_server",
+        lambda port, addr, **_: started.append((port, addr)),
     )
 
-    assert task_observability.serve_worker_metrics(9808) is False
+    assert task_observability.serve_worker_metrics("127.0.0.1", 9808) is False
     assert started == []
 
 
@@ -137,11 +147,56 @@ def test_worker_metrics_server_clears_stale_files_and_starts(
 ) -> None:
     (tmp_path / "counter_123.db").write_bytes(b"stale")
     monkeypatch.setenv("PROMETHEUS_MULTIPROC_DIR", str(tmp_path))
-    started: list[int] = []
+    started: list[tuple[int, str]] = []
     monkeypatch.setattr(
-        task_observability, "start_http_server", lambda port, **_: started.append(port)
+        task_observability,
+        "start_http_server",
+        lambda port, addr, **_: started.append((port, addr)),
     )
 
-    assert task_observability.serve_worker_metrics(9808) is True
-    assert started == [9808]
+    assert task_observability.serve_worker_metrics("127.0.0.1", 9808) is True
+    assert started == [(9808, "127.0.0.1")]
     assert list(tmp_path.glob("*.db")) == []
+
+
+def test_in_process_run_gives_the_caller_back_its_request_id_and_fields() -> None:
+    set_request_id("caller-req")
+    start_log_context()
+    bind_log_fields(user_id=5)
+    task = _task()  # no request id header, as with .apply()
+
+    _restore_request_id(task_id="t-3", task=task)  # type: ignore[arg-type]
+    assert get_log_fields()["celery_task_id"] == "t-3"
+    _clear_request_id(task_id="t-3", task=task, state="SUCCESS")  # type: ignore[arg-type]
+
+    assert get_request_id() == "caller-req"
+    assert get_log_fields() == {"user_id": 5}
+    clear_log_context()
+
+
+def test_task_arguments_and_results_are_kept_out_of_celery_records() -> None:
+    data = {
+        "id": "t-4",
+        "name": TASK,
+        "args": "()",
+        "kwargs": "{'email': 'a@b.c'}",
+        "return_value": "{'token': 'x'}",
+        "runtime": 0.1,
+    }
+    record = logging.LogRecord(
+        "celery.app.trace",
+        logging.INFO,
+        __file__,
+        1,
+        "Task %(name)s[%(id)s] succeeded in %(runtime)ss: %(return_value)s",
+        (data,),
+        None,
+    )
+    record.__dict__["data"] = data
+
+    assert task_observability.TaskPayloadFilter().filter(record)
+
+    assert "a@b.c" not in json.dumps(record.__dict__["data"]) and "token" not in record.getMessage()
+    assert record.__dict__["data"]["kwargs"] == task_observability.OMITTED
+    assert record.getMessage().endswith(f": {task_observability.OMITTED}")
+    assert record.__dict__["data"]["runtime"] == 0.1

@@ -28,8 +28,8 @@ session-05 text format for local reading; both carry the request id.
 | `status` | HTTP status | | middleware |
 | `duration_ms` | ✓ | ✓ | middleware / signal handler |
 | `error_category` | ✓ | ✓ | exception handlers, middleware / `task_failure`, `task_retry` |
-| `user_id` | when authenticated | | `get_current_user`, `get_optional_current_user` |
-| `workspace_id` | when resolved | | `get_current_workspace_id` |
+| `user_id` | when authenticated | via `request_id` (see below) | `get_current_user`, `get_optional_current_user` |
+| `workspace_id` | when resolved | via `request_id` (see below) | `get_current_workspace_id` |
 | `project_id`, `task_id` | from the path, when present | | middleware |
 | `task_name`, `celery_task_id` | | ✓ (named so it never clashes with the TaskFlow `task_id`) | signal handler |
 | `retries` | | ✓ | signal handler |
@@ -47,6 +47,12 @@ body), the record keeps the status the client received and is marked `server_err
 
 Any other log call in the app picks up the same bound fields, so a warning logged deep in a
 service during a request also has `user_id`, `workspace_id` and `request_id`.
+
+Task records don't carry `user_id`, `workspace_id` or `project_id`. The jobs receive only IDs of
+their own (`send_task_assignment_notification` gets `notification_id`; the Beat sweeps get
+nothing), so the worker would need a database lookup just to label its logs. The link back is
+`request_id`: a job queued by a request carries that request's id, and the request record has the
+user, workspace and project. Beat jobs have `request_id: null`, as they belong to no request.
 
 ### How fields get onto the record
 

@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 from celery.exceptions import Retry
 from prometheus_client import REGISTRY
+from sqlalchemy.exc import IntegrityError
 from taskflow_shared.logging import (
     JsonFormatter,
     bind_log_fields,
@@ -108,6 +109,18 @@ def test_failure_log_names_the_error_category(task_logs: JsonLines) -> None:
     assert entry["outcome"] == "failed"
     assert entry["error_category"] == "connection_error"
     assert entry["level"] == "ERROR"
+
+
+def test_database_errors_are_categorised_by_class_not_their_docs_code(
+    task_logs: JsonLines,
+) -> None:
+    error = IntegrityError("INSERT INTO task ...", {}, Exception("duplicate key"))
+    assert error.code == "gkpj"  # SQLAlchemy's docs-link id, not an error code
+
+    _run("FAILURE", error=error)
+
+    [entry] = task_logs.entries
+    assert entry["error_category"] == "integrity_error"
 
 
 def test_retry_reason_is_recorded_as_the_error_category(task_logs: JsonLines) -> None:

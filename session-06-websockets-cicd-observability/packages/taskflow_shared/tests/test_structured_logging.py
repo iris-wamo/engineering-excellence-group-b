@@ -181,6 +181,8 @@ def test_configure_logging_accepts_lower_case_level_names() -> None:
         (TimeoutError(), "timeout_error"),
         (type("HTTPStatusError", (Exception,), {})(), "http_status_error"),
         (type("gaierror", (Exception,), {})(), "gaierror"),
+        # Only AppErrors' codes count; other libraries use `code` for other things
+        (type("CodedLibraryError", (Exception,), {"code": "gkpj"})(), "coded_library_error"),
     ],
 )
 def test_error_category_is_the_code_or_the_snake_case_class_name(

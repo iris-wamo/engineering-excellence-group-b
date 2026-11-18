@@ -1,7 +1,7 @@
 """Controlled load against one endpoint, checked against a p95 latency and error-rate target.
 
 N clients each send requests back to back for a fixed time. Errors are 5xx responses and
-requests that failed outright (timeouts, refused connections); 4xx are counted separately.
+requests that got no response at all (timeouts, refused connections); 4xx are counted separately.
 The same traffic shows up on the Grafana dashboard, so client-side and server-side numbers
 can be compared. The targets are teaching targets (docs/session-06/slo-and-deliverables.md).
 
@@ -19,9 +19,20 @@ import httpx
 
 @dataclass
 class Results:
+    # One latency per response received, whatever its status
     latencies: list[float] = field(default_factory=list)
-    errors: int = 0
-    client_errors: int = 0
+    server_errors: int = 0  # 5xx responses (also in latencies)
+    failed: int = 0  # requests that got no response (not in latencies)
+    client_errors: int = 0  # 4xx responses (also in latencies)
+
+    @property
+    def attempts(self) -> int:
+        return len(self.latencies) + self.failed
+
+    @property
+    def error_rate(self) -> float:
+        """Share of attempts that got a 5xx or no response at all."""
+        return (self.server_errors + self.failed) / self.attempts if self.attempts else 0.0
 
 
 async def _client(client: httpx.AsyncClient, url: str, deadline: float, results: Results) -> None:
@@ -30,11 +41,11 @@ async def _client(client: httpx.AsyncClient, url: str, deadline: float, results:
         try:
             response = await client.get(url)
         except httpx.HTTPError:
-            results.errors += 1
+            results.failed += 1
             continue
         results.latencies.append(time.perf_counter() - started)
         if response.status_code >= 500:
-            results.errors += 1
+            results.server_errors += 1
         elif response.status_code >= 400:
             results.client_errors += 1
 
@@ -66,11 +77,14 @@ def main() -> int:
         return 1
     cuts = statistics.quantiles(results.latencies, n=100)
     p50, p95, p99 = (cuts[49] * 1000, cuts[94] * 1000, cuts[98] * 1000)
-    error_rate = results.errors / (requests + results.errors)
+    error_rate = results.error_rate
 
     print(f"requests: {requests}  ({requests / args.duration:.1f}/s)")
     print(f"latency ms: p50 {p50:.1f}  p95 {p95:.1f}  p99 {p99:.1f}")
-    print(f"errors: {results.errors} ({error_rate:.2%})  4xx: {results.client_errors}")
+    print(
+        f"errors: {results.server_errors + results.failed} ({error_rate:.2%}): "
+        f"5xx {results.server_errors}, no response {results.failed}  4xx: {results.client_errors}"
+    )
 
     p95_ok = p95 <= args.p95_target_ms
     errors_ok = error_rate <= args.error_target

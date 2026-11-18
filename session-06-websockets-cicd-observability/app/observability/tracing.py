@@ -1,6 +1,6 @@
 """Tracing for the API and the Celery worker (see docs/session-06/observability.md).
 
-Spans go to the OTLP endpoint in OTEL_EXPORTER_OTLP_ENDPOINT (Jaeger in Compose). The
+Spans go to the OTLP endpoint in OTEL_EXPORTER_OTLP_ENDPOINT (Tempo in Compose). The
 instrumentation is always installed; without an endpoint its spans are no-ops.
 """
 

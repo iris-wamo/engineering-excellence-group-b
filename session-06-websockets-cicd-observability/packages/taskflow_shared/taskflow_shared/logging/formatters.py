@@ -98,7 +98,7 @@ class JsonFormatter(logging.Formatter):
         }
         span_context = trace.get_current_span().get_span_context()
         if span_context.is_valid:
-            # Same hex format Jaeger shows, so a log line's trace_id can be pasted into its search
+            # Same hex format Tempo uses, so a log line's trace_id can be pasted into Grafana
             entry["trace_id"] = format(span_context.trace_id, "032x")
             entry["span_id"] = format(span_context.span_id, "016x")
         entry.update(get_log_fields())

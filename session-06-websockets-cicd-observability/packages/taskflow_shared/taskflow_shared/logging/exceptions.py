@@ -10,9 +10,13 @@ def error_category(exc: BaseException) -> str:
     """snake_case category: the error envelope code for AppErrors, else the class name.
 
     NotFoundError -> not_found (its code), ConnectionError -> connection_error.
+    Only AppErrors' codes count: other libraries use `code` for something else (SQLAlchemy's
+    is a docs-link id, e.g. "gkpj" on IntegrityError).
     """
-    code = getattr(exc, "code", None)
-    name = code if isinstance(code, str) else type(exc).__name__
+    # Imported here: taskflow_shared.errors imports this module, so a top-level import cycles
+    from taskflow_shared.errors.exceptions import AppError
+
+    name = exc.code if isinstance(exc, AppError) else type(exc).__name__
     return _CAMEL_BOUNDARY.sub("_", name).lower()
 
 

@@ -7,6 +7,7 @@ from typing import Any
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from taskflow_shared.observability import traced
 
 from app.cache.task_summary_cache import invalidate_summary, lookup_summary, store_summary
 from app.core.exceptions import (
@@ -270,6 +271,7 @@ async def announce_new_task_assignee(
 
 class TaskService:
     @staticmethod
+    @traced("TaskService.create_task")
     async def create_task(
         db: AsyncSession,
         data: TaskCreate,
@@ -349,6 +351,7 @@ class TaskService:
         return TaskResponse.model_validate(task)
 
     @staticmethod
+    @traced("TaskService.update_task_status")
     async def update_task_status(
         db: AsyncSession,
         task_id: int,
@@ -377,6 +380,7 @@ class TaskService:
         return TaskResponse.model_validate(task)
 
     @staticmethod
+    @traced("TaskService.assign_task")
     async def assign_task(
         db: AsyncSession,
         task_id: int,

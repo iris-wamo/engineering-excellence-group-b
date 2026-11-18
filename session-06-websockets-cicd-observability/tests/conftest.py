@@ -29,7 +29,7 @@ from tests.fixtures.auth import (
 )
 from tests.fixtures.factories import DEFAULT_WORKSPACE_ID, DataFactory
 
-pytest_plugins = ["tests.fixtures.database", "tests.fixtures.redis"]
+pytest_plugins = ["tests.fixtures.database", "tests.fixtures.redis", "tests.fixtures.tracing"]
 
 # Every test is marked after the top-level folder it lives in (tests/unit, tests/integration,
 # tests/auth), so `pytest -m unit` runs only the tests that need no database. Tests outside

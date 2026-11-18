@@ -1,5 +1,7 @@
 """Application settings loaded from the environment."""
 
+from typing import Literal
+
 from pydantic import Field, MongoDsn, PostgresDsn, RedisDsn, model_validator
 from taskflow_shared.config import BaseAppSettings
 from taskflow_shared.enums.common import Environment
@@ -41,6 +43,19 @@ class Settings(BaseAppSettings):
     due_reminder_batch_size: int = 500
     # Flower port, used by `make flower` and the Compose `flower` service
     flower_port: int = 5555
+
+    # Logging: "json" writes one JSON object per line (see docs/session-06/observability.md),
+    # "text" keeps the readable session-05 format for local runs.
+    log_format: Literal["json", "text"] = "json"
+    log_level: str = "INFO"
+    # Where the Celery worker serves its Prometheus metrics (the API serves /metrics itself).
+    # Loopback by default; Compose sets 0.0.0.0 inside the container and publishes it on
+    # 127.0.0.1 only.
+    worker_metrics_addr: str = "127.0.0.1"
+    worker_metrics_port: int = 9808
+    # When set, GET /metrics requires "Authorization: Bearer <token>". Set it wherever the
+    # API port is reachable from outside the internal network.
+    metrics_token: str | None = None
 
     @property
     def due_reminder_lock_ttl_seconds(self) -> int:

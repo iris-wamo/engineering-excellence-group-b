@@ -1,4 +1,4 @@
-"""Task status changes and assignments made through the API publish task events."""
+"""Task status changes, assignments and comments made through the API publish task events."""
 
 from typing import Any
 
@@ -8,10 +8,12 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import set_committed_value
 
+from app.core.config import settings
 from app.events import publisher as publisher_module
-from app.events.schemas import TaskEventType
+from app.events.schemas import TaskEvent, TaskEventType
 from app.models.enums import ProjectRole, TaskStatus
 from app.models.task import Task
+from tests.fixtures.auth import auth_headers_for
 from tests.fixtures.events import stream_events
 from tests.fixtures.factories import DataFactory
 
@@ -204,6 +206,92 @@ async def test_redis_outage_does_not_fail_the_request(
 
     assert resp.status_code == 200
     assert resp.json()["status"] == "in_progress"
+
+
+async def test_comment_publishes_exactly_one_comment_added_event(
+    client: AsyncClient, factory: DataFactory, redis_client: Redis
+) -> None:
+    project = await factory.project()
+    author = await factory.member(project)
+    task = await factory.task(project)
+
+    resp = await client.post(
+        f"/api/v1/tasks/{task.id}/comments",
+        json={"content": "This task is almost complete."},
+        headers={**author.headers, "X-Request-ID": "evt-comment-1"},
+    )
+
+    assert resp.status_code == 201
+    [event] = await stream_events(redis_client)
+    assert event.event_type is TaskEventType.comment_added
+    assert (event.task_id, event.project_id, event.workspace_id) == (
+        task.id,
+        project.id,
+        project.workspace_id,
+    )
+    assert event.actor_id == author.id
+    assert event.request_id == "evt-comment-1"
+    assert event.data["comment_id"] == resp.json()["id"]
+    assert event.data["author_id"] == author.id
+    assert event.data["content"] == "This task is almost complete."
+
+
+async def test_comment_event_reaches_the_pubsub_channel_too(
+    client: AsyncClient, factory: DataFactory, redis_client: Redis
+) -> None:
+    project = await factory.project()
+    author = await factory.member(project)
+    task = await factory.task(project)
+
+    async with redis_client.pubsub(ignore_subscribe_messages=True) as pubsub:
+        await pubsub.subscribe(settings.task_events_channel)
+        resp = await client.post(
+            f"/api/v1/tasks/{task.id}/comments",
+            json={"content": "Heard live."},
+            headers=author.headers,
+        )
+        assert resp.status_code == 201
+        message = None
+        for _ in range(5):
+            message = await pubsub.get_message(timeout=0.5)
+            if message is not None:
+                break
+
+    assert message is not None
+    event = TaskEvent.model_validate_json(message["data"])
+    assert event.event_type is TaskEventType.comment_added
+    assert event.data["comment_id"] == resp.json()["id"]
+
+
+async def test_refused_comment_publishes_nothing(
+    client: AsyncClient, factory: DataFactory, redis_client: Redis
+) -> None:
+    project = await factory.project()
+    task = await factory.task(project)
+    outsider = await factory.user()
+
+    resp = await client.post(
+        f"/api/v1/tasks/{task.id}/comments",
+        json={"content": "Not allowed."},
+        headers=auth_headers_for(outsider.id, workspace_id=project.workspace_id),
+    )
+
+    assert resp.status_code == 403
+    assert await stream_events(redis_client) == []
+
+
+async def test_reading_comments_publishes_nothing(
+    client: AsyncClient, factory: DataFactory, redis_client: Redis
+) -> None:
+    project = await factory.project()
+    author = await factory.member(project)
+    task = await factory.task(project)
+    await factory.comment(task, author.id)
+
+    resp = await client.get(f"/api/v1/tasks/{task.id}/comments", headers=author.headers)
+
+    assert resp.status_code == 200
+    assert await stream_events(redis_client) == []
 
 
 def _simulate_concurrent_write_after_commit(

@@ -11,6 +11,7 @@ from app.models.project import Project
 from app.models.project_user import ProjectUser
 from app.models.task import Task
 from app.models.task_assignment_history import TaskAssignmentHistory
+from app.models.task_comment import TaskComment
 from app.models.task_status_history import TaskStatusHistory
 from app.models.user import User
 from app.models.workspace import Workspace
@@ -24,6 +25,7 @@ __all__ = [
     "ProjectUser",
     "Task",
     "TaskAssignmentHistory",
+    "TaskComment",
     "TaskPriority",
     "TaskStatus",
     "TaskStatusHistory",

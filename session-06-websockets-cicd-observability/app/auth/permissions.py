@@ -94,6 +94,21 @@ def require_task_permission(
     return dependency
 
 
+async def require_task_project_member(
+    task_id: int,
+    current_user: CurrentUser,
+    workspace_id: CurrentWorkspaceId,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> User:
+    task = await _get_task(db, task_id, workspace_id=workspace_id)
+    role = await MembershipRepository.get_role_in_project(
+        db, user_id=current_user.id, project_id=task.project_id
+    )
+    if role is None:
+        raise ForbiddenError()
+    return current_user
+
+
 async def require_task_assignee(
     task_id: int,
     current_user: CurrentUser,

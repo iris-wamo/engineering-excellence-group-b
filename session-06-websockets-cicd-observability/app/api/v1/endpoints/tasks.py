@@ -11,6 +11,7 @@ from app.auth.permissions import (
     Permission,
     require_task_assignee,
     require_task_permission,
+    require_task_project_member,
 )
 from app.auth.workspace_context import CurrentWorkspaceId
 from app.db.session import get_db
@@ -24,6 +25,11 @@ from app.schemas.task import (
     TaskStatusUpdate,
     TaskSummaryResponse,
 )
+from app.schemas.task_comment import (
+    TaskCommentCreate,
+    TaskCommentListResponse,
+    TaskCommentResponse,
+)
 from app.schemas.task_import import (
     TaskBatchImportRequest,
     TaskBatchImportResponse,
@@ -31,6 +37,7 @@ from app.schemas.task_import import (
     TaskImportResponse,
     TaskRawImportRequest,
 )
+from app.services.task_comment_service import TaskCommentService
 from app.services.task_import_service import TaskImportService
 from app.services.task_service import TaskService
 
@@ -255,4 +262,46 @@ async def assign_task(
         payload,
         workspace_id=workspace_id,
         actor_id=current_user.id,
+    )
+
+
+@router.post(
+    "/{task_id}/comments",
+    response_model=TaskCommentResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_task_comment(
+    task_id: int,
+    payload: TaskCommentCreate,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    workspace_id: CurrentWorkspaceId,
+    current_user: Annotated[User, Depends(require_task_project_member)],
+) -> TaskCommentResponse:
+    return await TaskCommentService.create_comment(
+        db,
+        task_id,
+        payload,
+        workspace_id=workspace_id,
+        author_id=current_user.id,
+    )
+
+
+@router.get(
+    "/{task_id}/comments",
+    response_model=TaskCommentListResponse,
+    dependencies=[Depends(require_task_project_member)],
+)
+async def list_task_comments(
+    task_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    workspace_id: CurrentWorkspaceId,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=100),
+) -> TaskCommentListResponse:
+    return await TaskCommentService.list_comments(
+        db,
+        task_id,
+        page=page,
+        page_size=page_size,
+        workspace_id=workspace_id,
     )

@@ -10,12 +10,14 @@ from taskflow_shared.logging import get_request_id
 
 from app.models.enums import TaskStatus
 from app.models.task import Task
+from app.models.task_comment import TaskComment
 
 
 class TaskEventType(StrEnum):
     status_changed = "task.status_changed"
     assigned = "task.assigned"
     unassigned = "task.unassigned"
+    comment_added = "task.comment_added"
 
 
 class TaskEvent(BaseModel):
@@ -65,6 +67,20 @@ class TaskEvent(BaseModel):
             task,
             actor_id,
             {"previous_assignee_id": previous_assignee_id, "new_assignee_id": task.assignee_id},
+        )
+
+    @classmethod
+    def comment_added(cls, task: Task, comment: TaskComment) -> "TaskEvent":
+        return cls._for_task(
+            TaskEventType.comment_added,
+            task,
+            comment.user_id,
+            {
+                "comment_id": comment.id,
+                "author_id": comment.user_id,
+                "content": comment.content,
+                "created_at": comment.created_at.isoformat(),
+            },
         )
 
     @classmethod

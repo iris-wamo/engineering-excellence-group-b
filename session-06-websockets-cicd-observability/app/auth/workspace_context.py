@@ -10,6 +10,7 @@ from app.auth.dependencies import OptionalCurrentUser
 from app.core.config import settings
 from app.core.exceptions import AppError, ForbiddenError, NotAuthenticatedError, NotFoundError
 from app.db.session import get_db
+from app.models.user import User
 from app.repositories.workspace_repository import WorkspaceRepository
 
 
@@ -46,6 +47,13 @@ async def get_current_workspace_id(
        - If user is authenticated and not yet in workspace 1, ensures enrollment.
        - Returns 1.
     """
+    return await resolve_workspace_id(db, user, workspace_header)
+
+
+async def resolve_workspace_id(
+    db: AsyncSession, user: User | None, workspace_header: str | None
+) -> int:
+    """Resolve and validate a workspace for HTTP and WebSocket requests."""
     if workspace_header is not None:
         try:
             workspace_id = int(workspace_header.strip())

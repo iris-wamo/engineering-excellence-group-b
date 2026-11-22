@@ -41,7 +41,7 @@ jobs:
             exit 1
           fi
           cd "$CURRENT_SESSION"
-          uv sync --locked --quiet
+          uv sync --locked
           heads=$(uv run alembic heads | grep -c '(head)' || true)
           echo "heads found: $heads"
           uv run alembic heads

@@ -1,5 +1,10 @@
 # Index + EXPLAIN ANALYZE Before/After
 
+> Historical session-03 write-up. The commands assume the session-03 schema, where
+> `f7715786b494` was the head. In this session `ix_task_status_priority_id` is replaced by
+> `ix_task_workspace_status_priority_id` (dropped in `cbf85300077c`), so `alembic downgrade -1`
+> does not do what this demo describes. Don't run it as instructions here.
+
 ## Loom Video
 
 https://www.loom.com/share/c5b48b31b1c345448385c922423dcd8c

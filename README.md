@@ -74,6 +74,7 @@ Each session is a standalone copy of the previous one. When you fork `session-NN
 
 - Add the new session to the list above.
 - Update `CURRENT_SESSION` in [`.github/workflows/alembic-heads.yml`](.github/workflows/alembic-heads.yml) to the new directory name. The Alembic single-head check only runs against that one session; if it is not updated, the new session's migrations are not checked.
+- Update `CURRENT_SESSION` in [`.github/workflows/session-quality.yml`](.github/workflows/session-quality.yml) the same way. The PR quality gate (lint, type check, migrations, tests) only runs against that session; with a stale value it keeps checking the old session, and PRs that touch only the new one skip every check and still pass green.
 
 ## Pull request description format
 

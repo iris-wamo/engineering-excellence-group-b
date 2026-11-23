@@ -11,10 +11,16 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import pytest
+from asyncpg.exceptions import InvalidCatalogNameError
 from pymongo import MongoClient
 from sqlalchemy import text
 from sqlalchemy.ext import asyncio as sqlalchemy_asyncio
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from app.core.config import settings
 from app.db.base import Base
@@ -41,6 +47,34 @@ def use_test_mongo_db() -> Generator[None, None]:
 async def test_database() -> AsyncGenerator[str, None]:
     """Create the PostgreSQL schema once per session (with Workspace 1) and drop it at the end."""
     engine = create_async_engine(TEST_DATABASE_URL)
+    try:
+        await _create_schema(engine)
+    except InvalidCatalogNameError:
+        await engine.dispose()
+        # Stop the whole run: a fixture error would repeat for every database test.
+        pytest.exit(
+            _missing_test_database_message(_db_name), returncode=pytest.ExitCode.TESTS_FAILED
+        )
+    yield TEST_DATABASE_URL
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.drop_all)
+    await engine.dispose()
+
+
+def _missing_test_database_message(app_db_name: str) -> str:
+    """Explain how to create the missing test database for a given app database name."""
+    return (
+        f'Test database "{app_db_name}_test" does not exist (the DATABASE_URL database name '
+        'plus "_test").\n'
+        "  - Check that POSTGRES_DB matches the database name in DATABASE_URL; the container "
+        "creates <POSTGRES_DB>_test.\n"
+        "  - Docker: with the stack up, run `make docker-test-db` (creates <POSTGRES_DB>_test).\n"
+        "  - Native PostgreSQL: create it as in README Step 3."
+    )
+
+
+async def _create_schema(engine: AsyncEngine) -> None:
+    """Rebuild every table in the test database and insert the default Workspace 1."""
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.drop_all)
         await connection.run_sync(Base.metadata.create_all)
@@ -58,10 +92,6 @@ async def test_database() -> AsyncGenerator[str, None]:
                 "COALESCE((SELECT MAX(id) FROM workspace), 1));"
             )
         )
-    yield TEST_DATABASE_URL
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.drop_all)
-    await engine.dispose()
 
 
 @pytest.fixture(scope="session")

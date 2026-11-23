@@ -13,7 +13,8 @@ services:
       - pgdata:/var/lib/postgresql/data
 
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-taskflow} -d ${POSTGRES_DB:-taskflow}"]
+      # -h 127.0.0.1 checks TCP: during first init the image runs a socket-only temp server.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER:-taskflow} -d ${POSTGRES_DB:-taskflow}"]
       interval: 5s
       timeout: 3s
       retries: 5

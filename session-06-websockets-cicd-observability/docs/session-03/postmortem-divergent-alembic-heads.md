@@ -1,5 +1,8 @@
 # Post-Mortem Report: Divergent Alembic Migration Heads on `main`
 
+> Historical session-03 write-up: "HEAD" below means the session-03 head (`f7715786b494`).
+> Later sessions added migrations on top; run `uv run alembic heads` for the current one.
+
 | Metadata | Details |
 |---|---|
 | **Incident ID / Issue** | [#76](https://github.com/iris-wamo/engineering-excellence-group-b/issues/76) / [PR #77](https://github.com/iris-wamo/engineering-excellence-group-b/pull/77) |

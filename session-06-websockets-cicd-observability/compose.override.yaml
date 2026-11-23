@@ -4,6 +4,11 @@ services:
     ports:
       - "5433:5432"
 
+    volumes:
+      # Creates <POSTGRES_DB>_test for the test suite. The image runs it only when pgdata is
+      # empty; for an existing volume run `make docker-test-db` (safe to repeat).
+      - ./docker/postgres/init-test-db.sh:/docker-entrypoint-initdb.d/10-create-test-db.sh:ro
+
   api:
     volumes:
       - ./app:/app/app

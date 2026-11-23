@@ -32,9 +32,7 @@ class AuthorizationState:
     project_members: set[tuple[int, int]] = field(default_factory=set)
 
     def add_user(self, user_id: int, workspace_id: int) -> None:
-        self.users[user_id] = type(
-            "FakeUser", (), {"id": user_id, "is_active": True}
-        )()
+        self.users[user_id] = type("FakeUser", (), {"id": user_id, "is_active": True})()
         self.workspace_members.add((user_id, workspace_id))
 
     def add_project(self, project_id: int, workspace_id: int) -> None:
@@ -63,9 +61,7 @@ def authorization_state(monkeypatch: pytest.MonkeyPatch) -> AuthorizationState:
             if member_id == user_id
         ]
 
-    async def get_project(
-        _db: Any, project_id: int, workspace_id: int | None = None
-    ) -> Any:
+    async def get_project(_db: Any, project_id: int, workspace_id: int | None = None) -> Any:
         resolved_workspace_id = state.projects.get(project_id)
         if resolved_workspace_id is None or (
             workspace_id is not None and resolved_workspace_id != workspace_id
@@ -78,11 +74,7 @@ def authorization_state(monkeypatch: pytest.MonkeyPatch) -> AuthorizationState:
         )()
 
     async def get_project_role(_db: Any, *, user_id: int, project_id: int) -> ProjectRole | None:
-        return (
-            ProjectRole.member
-            if (user_id, project_id) in state.project_members
-            else None
-        )
+        return ProjectRole.member if (user_id, project_id) in state.project_members else None
 
     monkeypatch.setattr(UserRepository, "get_by_id", staticmethod(get_user))
     monkeypatch.setattr(WorkspaceRepository, "get_by_id", staticmethod(get_workspace))
@@ -93,9 +85,7 @@ def authorization_state(monkeypatch: pytest.MonkeyPatch) -> AuthorizationState:
         WorkspaceRepository, "get_user_workspaces", staticmethod(get_user_workspaces)
     )
     monkeypatch.setattr(ProjectRepository, "get_by_id", staticmethod(get_project))
-    monkeypatch.setattr(
-        MembershipRepository, "get_role_in_project", staticmethod(get_project_role)
-    )
+    monkeypatch.setattr(MembershipRepository, "get_role_in_project", staticmethod(get_project_role))
     return state
 
 

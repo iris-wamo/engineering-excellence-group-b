@@ -242,9 +242,7 @@ async def _authenticate(
             return False
         if message is None:
             continue
-        if message.get("type") != "authenticate" or not isinstance(
-            message.get("token"), str
-        ):
+        if message.get("type") != "authenticate" or not isinstance(message.get("token"), str):
             await _send_error(
                 websocket,
                 "AUTHENTICATION_REQUIRED",
@@ -368,9 +366,7 @@ async def _serve_connection(
 
 
 @router.websocket("/ws/task-activity")
-async def task_activity(
-    websocket: WebSocket, db: Annotated[AsyncSession, Depends(get_db)]
-) -> None:
+async def task_activity(websocket: WebSocket, db: Annotated[AsyncSession, Depends(get_db)]) -> None:
     """Authenticate and subscribe a client to project-scoped task activity."""
     if not _origin_is_allowed(websocket):
         await _close(websocket, 4403)

@@ -9,6 +9,7 @@ dependencies = [
     "fastapi>=0.110.0",
     "starlette>=0.36.0",
     "redis>=5.0",
+    "prometheus-client>=0.20",
 ]
 
 [build-system]

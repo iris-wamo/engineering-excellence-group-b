@@ -1,147 +1,115 @@
 # Demo 05 — Structured Logs and Metrics
 
 ## Loom Video
-- **Loom Video Status**: **MANUAL FOLLOW-UP REQUIRED** (No Loom recording exists in the repository. A video link was not invented; record a 2–3 minute walkthrough and paste the URL here).
-- **Loom Link**: `[Manual Follow-up: Insert Loom recording URL here once recorded]`
-- **Recording Instructions**: Record a 2–3 minute walkthrough demonstrating:
-  1. The task summary endpoint returning the 4 required pieces of data.
-  2. Executing `uv run python scripts/demo_async_vs_blocking.py` to highlight the side-by-side concurrency timing table (2.43x speedup vs thread pool; ~7.5x vs loop starvation).
-  3. The simulated timeout case triggering an HTTP 504 Gateway Timeout with the standard ADR-001 error response envelope.
-
----
+Paste Loom link here.
 
 ## Objective
-Demonstrate the concrete engineering impact of asynchronous programming in FastAPI:
-1. Show how non-blocking I/O multiplexing (`asyncio.sleep`) allows multiple concurrent requests to overlap on a single thread.
-2. Demonstrate how synchronous blocking operations (`time.sleep`) offloaded to a bounded thread pool (`max_workers=4`) process in batches, and how accidental synchronous blocking directly inside `async def` starves the event loop (tested in `test_sync_call_inside_async_starves_event_loop`).
-3. Verify that external call timeouts prevent hung dependencies from starving application resources by returning a standard HTTP 504 error response envelope.
-
----
+Show that every API request and every Celery task run leaves one JSON log record with who, what,
+outcome and duration, and that Prometheus metrics count requests and task runs without unbounded
+labels or leaked credentials.
 
 ## Scenario
-A project dashboard calls a `GET /api/v1/tasks/summary` endpoint to display task metrics (status breakdown, overdue count, assigned count) combined with health telemetry from a simulated external metrics microservice. We compare how the API behaves when multiple team members load their dashboards simultaneously under non-blocking async vs synchronous blocking execution.
-
----
+Support gets "projects page fails for me". Without user and workspace IDs on the request record,
+and without a per-route error rate, nobody can tell whether it is one user, one workspace, or every
+request to that route.
 
 ## Commands / Steps Used
-
 ```bash
-# 1. Run integration tests (normal summary, blocking summary, timeouts, workspace isolation, concurrency)
-uv run pytest tests/integration/api/test_task_summary_api.py -v
+make docker-up
 
-# 2. Run unit tests for Pydantic schemas
-uv run pytest tests/unit/schemas/test_task_summary_schema.py -v
+# A success, a domain error, and a path that matches no route
+curl -s localhost:8000/api/v1/projects > /dev/null
+curl -s localhost:8000/api/v1/projects/999999 > /dev/null
+curl -s localhost:8000/nope/123 > /dev/null
 
-# 3. Execute the automated benchmark and demonstration script
-uv run python scripts/demo_async_vs_blocking.py --concurrency 10 --delay 0.2 --timeout 1.0
+# Request records
+docker compose logs api --since 1m | grep '"logger": "app.requests"'
 
-# 4. Direct curl test — Normal async summary
-curl -s -X GET "http://localhost:8000/api/v1/tasks/summary?external_delay=0.2&external_timeout=1.0" \
-  -H "Authorization: Bearer <TOKEN>" \
-  -H "X-Workspace-ID: 1" | jq .
+# API metrics
+curl -s localhost:8000/metrics | grep -E '^taskflow_http_requests_total|^taskflow_http_request_duration_seconds_count'
 
-# 5. Direct curl test — External timeout trigger
-curl -s -X GET "http://localhost:8000/api/v1/tasks/summary?external_delay=1.5&external_timeout=0.5" \
-  -H "Authorization: Bearer <TOKEN>" \
-  -H "X-Workspace-ID: 1" | jq .
+# Worker metrics and task records (Beat runs the reminder sweep every minute)
+curl -s 127.0.0.1:9808/metrics | grep '^taskflow_celery_tasks_total'
+docker compose logs celery-worker --since 2m | grep '"logger": "app.tasks"'
+
+# Redaction and label tests
+uv run pytest packages/taskflow_shared/tests/test_structured_logging.py tests/unit/observability tests/integration/api/test_request_logging.py
 ```
-
----
 
 ## Expected Behavior
-1. **Async Endpoint (`/tasks/summary`)**:
-   Under 10 concurrent requests with 0.2s external delay, all requests should overlap on the asyncio event loop and complete in $\approx 0.2\text{s} - 0.3\text{s}$ total.
-2. **Blocking Endpoint (`/tasks/summary/blocking`)**:
-   Under 10 concurrent requests with 0.2s external delay, the blocking external call is offloaded to a bounded `ThreadPoolExecutor(max_workers=4)`. Because the pool is limited to 4 workers, requests process in batches ($4 + 4 + 2$), completing in $\approx 3 \times 0.2\text{s} \approx 0.65\text{s}$ total. (By contrast, un-offloaded synchronous calls directly inside `async def` starve the event loop thread, serializing to $\approx 10 \times 0.2\text{s} = 2.0\text{s}$, as demonstrated in `test_sync_call_inside_async_starves_event_loop`).
-3. **Timeout Case**:
-   When external delay exceeds the timeout threshold (e.g. 1.2s delay vs 0.5s timeout), the API should abort at the 0.5s deadline and return HTTP 504 with code `EXTERNAL_SERVICE_TIMEOUT`.
-
----
+- One request record per call, with `operation` as the route template, `outcome`, `status`,
+  `duration_ms`, `workspace_id`, and `project_id`/`error_category` where they apply.
+- `/metrics` groups requests by route template; unknown paths share `<unmatched>`.
+- Worker metrics count runs from all pool processes on port 9808.
+- No token or password value appears in any record.
 
 ## Actual Findings
-
-Execution of `scripts/demo_async_vs_blocking.py`:
-
-```
-===========================================================================
- SIDE-BY-SIDE PERFORMANCE COMPARISON SUMMARY
-===========================================================================
-Endpoint                           | Requests | Total Time   | Avg Latency
------------------------------------+----------+--------------+-------------
-GET /api/v1/tasks/summary (Async)  | 10       |     0.268s  |     0.255s
-GET /tasks/summary/blocking (Sync) | 10       |     0.653s  |     0.403s
----------------------------------------------------------------------------
-Concurrency Speedup: 2.43x faster with non-blocking async!
-```
-
----
+All of the above held on the local Docker stack. Issues found while building and reviewing it, all
+fixed before this capture:
+- With FastAPI's nested routers, the matched route only knows `/projects/{project_id}`, so the
+  `/api/v1` prefix was missing from the label. The full template now comes from FastAPI's route
+  context.
+- `/docs` (hit by the container healthcheck) was labelled `<unmatched>` because FastAPI does not
+  record plain routes in the scope. It is now found by endpoint.
+- Worker records used `task_id` for the Celery job id while request records use it for the
+  TaskFlow task, so a search for `task_id=201` missed the worker side. Worker records now use
+  `celery_task_id`.
+- Retries logged `error_category: "Retry"` because Celery's retry signal passes its own wrapper.
+  The category is now the underlying error (`gaierror` when Postgres was stopped).
+- Database errors were categorised by SQLAlchemy's docs-link code (`IntegrityError.code` is
+  `"gkpj"`). Only app errors' codes are used now, so it is `integrity_error`.
 
 ## Evidence
+Captured on 2026-11-18 from the final code, on the local Docker stack.
 
-### 1. Successful Task Summary Response (HTTP 200 OK)
-All four required pieces of data returned:
+Request records (API container):
 ```json
-{
-  "workspace_id": 1,
-  "counts_by_status": {
-    "todo": 4,
-    "in_progress": 8,
-    "review": 0,
-    "done": 0
-  },
-  "overdue_count": 4,
-  "assigned_count": 12,
-  "total_count": 12,
-  "external_service": {
-    "service": "workload_service",
-    "status": "healthy",
-    "latency_ms": 201.1,
-    "mode": "async"
-  }
-}
+{"timestamp": "2026-11-18T11:54:34.396+00:00", "level": "INFO", "logger": "app.requests", "message": "GET /api/v1/projects 200", "request_id": "f13116dbec07498aa3ec14784e5964ba", "workspace_id": 1, "operation": "GET /api/v1/projects", "outcome": "success", "status": 200, "duration_ms": 144.12}
+{"timestamp": "2026-11-18T11:54:34.421+00:00", "level": "INFO", "logger": "app.requests", "message": "GET /api/v1/projects/{project_id} 404", "request_id": "0b590de81bdf49948de1bfae0600a3d3", "workspace_id": 1, "error_category": "not_found", "project_id": 999999, "operation": "GET /api/v1/projects/{project_id}", "outcome": "client_error", "status": 404, "duration_ms": 4.67}
+{"timestamp": "2026-11-18T11:54:34.467+00:00", "level": "INFO", "logger": "app.requests", "message": "GET <unmatched> 404", "request_id": "2c71c4d4249045a7845097827118d2d1", "error_category": "not_found", "operation": "GET <unmatched>", "outcome": "client_error", "status": 404, "duration_ms": 31.32}
 ```
 
-### 2. External Call Timeout Error Response (HTTP 504 Gateway Timeout)
-Enforced in 0.520s against a 1.2s delay:
+API `/metrics` (`/docs` is the container healthcheck):
+```text
+taskflow_http_requests_total{method="GET",route="/docs",status="200"} 5.0
+taskflow_http_requests_total{method="GET",route="/api/v1/projects",status="200"} 1.0
+taskflow_http_requests_total{method="GET",route="/api/v1/projects/{project_id}",status="404"} 1.0
+taskflow_http_requests_total{method="GET",route="<unmatched>",status="404"} 1.0
+```
+
+One assignment followed from the API into the worker by its request id (`make flow-demo`):
 ```json
-{
-  "error": {
-    "code": "EXTERNAL_SERVICE_TIMEOUT",
-    "message": "External service timed out",
-    "details": [
-      {
-        "field": "external_call",
-        "message": "Call exceeded the configured timeout of 0.5s"
-      }
-    ]
-  }
-}
+{"timestamp": "2026-11-18T11:54:41.483+00:00", "level": "INFO", "logger": "app.requests", "message": "POST /api/v1/tasks/{task_id}/assign 200", "request_id": "16a10a7a0dea4fcc920893309859b30a", "user_id": 15, "workspace_id": 1, "task_id": 203, "operation": "POST /api/v1/tasks/{task_id}/assign", "outcome": "success", "status": 200, "duration_ms": 103.06}
+{"timestamp": "2026-11-18T11:54:41.578+00:00", "level": "INFO", "logger": "app.tasks.notification_tasks", "message": "Transitioned pending notification 283 to 'sent' for task 203 to recipient 16.", "request_id": "16a10a7a0dea4fcc920893309859b30a", "task_name": "app.tasks.notification_tasks.send_task_assignment_notification", "celery_task_id": "07012e75-9ce1-4b9f-b6ae-b813bf6d91bf"}
+{"timestamp": "2026-11-18T11:54:41.581+00:00", "level": "INFO", "logger": "app.tasks", "message": "app.tasks.notification_tasks.send_task_assignment_notification succeeded", "request_id": "16a10a7a0dea4fcc920893309859b30a", "task_name": "app.tasks.notification_tasks.send_task_assignment_notification", "celery_task_id": "07012e75-9ce1-4b9f-b6ae-b813bf6d91bf", "operation": "app.tasks.notification_tasks.send_task_assignment_notification", "outcome": "succeeded", "retries": 0, "duration_ms": 91.33}
 ```
 
-### 3. Automated Test Suite Output
-```
-tests/integration/api/test_task_summary_api.py::test_async_task_summary_success_with_all_four_pieces_of_data PASSED
-tests/integration/api/test_task_summary_api.py::test_blocking_task_summary_success_matches_structure PASSED
-tests/integration/api/test_task_summary_api.py::test_async_summary_external_call_timeout_returns_504 PASSED
-tests/integration/api/test_task_summary_api.py::test_blocking_summary_external_call_timeout_returns_504 PASSED
-tests/integration/api/test_task_summary_api.py::test_summary_workspace_isolation PASSED
-tests/integration/api/test_task_summary_api.py::test_summary_empty_workspace_returns_zero_counts PASSED
-tests/integration/api/test_task_summary_api.py::test_async_summary_concurrency_non_blocking_behavior PASSED
-tests/integration/api/test_task_summary_api.py::test_task_summary_due_date_boundary_conditions PASSED
-tests/integration/api/test_task_summary_api.py::test_task_summary_query_parameter_validation PASSED
-============================== 9 passed in 1.04s ===============================
+A job sent with wrong arguments fails with `type_error`:
+```json
+{"timestamp": "2026-11-18T11:55:25.857+00:00", "level": "ERROR", "logger": "app.tasks", "message": "app.tasks.notification_tasks.send_task_assignment_notification failed", "request_id": null, "task_name": "app.tasks.notification_tasks.send_task_assignment_notification", "celery_task_id": "24cecd6a-7c04-4dcd-a7b4-5b21de3ed8a6", "error_category": "type_error", "operation": "app.tasks.notification_tasks.send_task_assignment_notification", "outcome": "failed", "retries": 0, "duration_ms": 39.17}
 ```
 
----
+A job sent while Postgres was stopped for 2 s retries on `gaierror`, then, with the database back,
+fails for good on a permanent error (the notification id it was given doesn't exist), without
+using its last retry:
+```json
+{"timestamp": "2026-11-18T11:55:31.285+00:00", "level": "INFO", "logger": "app.tasks", "message": "app.tasks.notification_tasks.send_task_assignment_notification retried", "request_id": null, "task_name": "app.tasks.notification_tasks.send_task_assignment_notification", "celery_task_id": "e037783a-2cb4-48bb-9862-4fe74b70a6cf", "error_category": "gaierror", "operation": "app.tasks.notification_tasks.send_task_assignment_notification", "outcome": "retried", "retries": 0, "duration_ms": 271.5}
+{"timestamp": "2026-11-18T11:55:32.284+00:00", "level": "INFO", "logger": "app.tasks", "message": "app.tasks.notification_tasks.send_task_assignment_notification retried", "request_id": null, "task_name": "app.tasks.notification_tasks.send_task_assignment_notification", "celery_task_id": "e037783a-2cb4-48bb-9862-4fe74b70a6cf", "error_category": "gaierror", "operation": "app.tasks.notification_tasks.send_task_assignment_notification", "outcome": "retried", "retries": 1, "duration_ms": 25.51}
+{"timestamp": "2026-11-18T11:55:34.387+00:00", "level": "ERROR", "logger": "app.tasks", "message": "app.tasks.notification_tasks.send_task_assignment_notification failed", "request_id": null, "task_name": "app.tasks.notification_tasks.send_task_assignment_notification", "celery_task_id": "e037783a-2cb4-48bb-9862-4fe74b70a6cf", "error_category": "invalid_assignment_notification_error", "operation": "app.tasks.notification_tasks.send_task_assignment_notification", "outcome": "failed", "retries": 2, "duration_ms": 108.26}
+```
+
+Worker `/metrics` after the above (Beat's sweeps included):
+```text
+taskflow_celery_tasks_total{outcome="succeeded",task="app.tasks.notification_tasks.requeue_stale_assignment_notifications"} 1.0
+taskflow_celery_tasks_total{outcome="succeeded",task="app.tasks.reminder_tasks.send_due_task_reminders"} 4.0
+taskflow_celery_tasks_total{outcome="succeeded",task="app.tasks.notification_tasks.send_task_assignment_notification"} 1.0
+taskflow_celery_tasks_total{outcome="failed",task="app.tasks.notification_tasks.send_task_assignment_notification"} 2.0
+taskflow_celery_tasks_total{outcome="retried",task="app.tasks.notification_tasks.send_task_assignment_notification"} 2.0
+```
 
 ## What We Learned
-1. **Async allows cooperative I/O multiplexing**: When operations yield via `await asyncio.sleep()`, the server handles concurrent requests on a single thread without CPU contention.
-2. **Blocking code in `async def` is fatal**: A single `time.sleep()` call or blocking library call freezes the entire worker process, creating head-of-line blocking for all subsequent requests.
-3. **Timeouts are critical fault barriers**: Without strict timeouts (`asyncio.wait_for`), slow downstream services cause connection pools to deplete and cascade failures back to the client.
-4. **Where async is NOT enough**: CPU-heavy tasks or long-running workflows (> 2-3s) cannot run safely inside API coroutines; they must be offloaded to Celery background workers.
-
----
+Fill in after recording.
 
 ## Open Questions
-1. **Caching (Issue #99)**: Should summary metrics be cached in Redis with a short TTL (e.g. 15–30s) or invalidated on task mutations (`create`, `status`, `assign`)?
-2. **Background Jobs (Issue #101)**: Should long-running data exports and batch reports be processed via Celery task queues instead of synchronous/asynchronous HTTP endpoints?
+- Should `/metrics` be served on a separate internal port instead of the public API port?
+- How long should request records be kept, given they contain user and workspace IDs?

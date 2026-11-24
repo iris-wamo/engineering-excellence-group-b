@@ -78,7 +78,10 @@ make docker-test-db
 
 - API docs: <http://localhost:8000/docs>
 - Flower: <http://127.0.0.1:5555> (or `FLOWER_PORT`), log in with `FLOWER_BASIC_AUTH`
-- Logs: `make docker-logs` (API) or `make docker-logs s=celery-worker`
+- Logs: `make docker-logs` (API) or `make docker-logs s=celery-worker`. Lines are JSON; set
+  `LOG_FORMAT=text` for the plain format
+- Metrics: API at <http://localhost:8000/metrics>, worker at <http://127.0.0.1:9808/metrics>
+  (see [`docs/session-06/observability.md`](docs/session-06/observability.md))
 
 The `.env.example` defaults point host commands at the Docker ports: PostgreSQL on **5433**,
 MongoDB on 27017 and Redis on 6379. To run without Docker, follow Steps 1–4 below.
@@ -99,7 +102,7 @@ Flower shows the jobs. The full trace, the failure cases and the tradeoffs are i
 | `db` | `localhost:5433` | Tasks, history, and the `notification` outbox | `make docker-db-shell` |
 | `mongo` | `localhost:27017` | Raw task imports (not part of this flow) | |
 | `redis` | `localhost:6379` | db 0: cache and task events · db 1: Celery broker · db 2: results | `make redis-cli`, `make events-streams` |
-| `celery-worker` | | Delivers notifications, runs the Beat sweeps | `make docker-logs s=celery-worker` |
+| `celery-worker` | <http://127.0.0.1:9808/metrics> | Delivers notifications, runs the Beat sweeps | `make docker-logs s=celery-worker` |
 | `celery-beat` | | Queues the reminder sweep (60s) and the outbox sweep (300s) | `make docker-logs s=celery-beat` |
 | `flower` | <http://127.0.0.1:5555> | Workers, job history, retries and failures | Browser, log in with `FLOWER_BASIC_AUTH` |
 

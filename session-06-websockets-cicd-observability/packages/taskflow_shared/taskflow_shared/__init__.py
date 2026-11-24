@@ -6,7 +6,8 @@ Provides reusable components across TaskFlow modules:
 - errors: AppError hierarchy, schemas, FastAPI exception handlers, and retry classification
 - locks: Redis distributed lock with token-checked release and renewal
 - pagination: Generic PaginatedResponse and PaginationParams
-- logging: Request ID context and tracing middleware
+- logging: Request ID context, JSON log records, redaction and the request log context
+- observability: Per-request completion logs and Prometheus HTTP metrics middleware
 - contracts: Common schema interfaces and header constants
 - enums: Common runtime enums
 """

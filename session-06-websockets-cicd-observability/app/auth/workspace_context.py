@@ -5,7 +5,6 @@ from typing import Annotated
 from fastapi import Depends, Header, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from taskflow_shared.contracts.constants import HEADER_WORKSPACE_ID
-from taskflow_shared.logging import bind_log_fields
 
 from app.auth.dependencies import OptionalCurrentUser
 from app.core.config import settings
@@ -76,7 +75,6 @@ async def get_current_workspace_id(
         if not is_member:
             raise ForbiddenError("You do not have permission to access this workspace")
 
-        bind_log_fields(workspace_id=workspace_id)
         return workspace_id
 
     # Fallback to default workspace context when X-Workspace-ID is omitted
@@ -86,13 +84,11 @@ async def get_current_workspace_id(
             raise ForbiddenError("You do not have permission to access any workspace")
 
         if any(ws.id == 1 for ws in user_workspaces):
-            bind_log_fields(workspace_id=1)
             return 1
 
     if not settings.allow_anonymous_default_workspace:
         raise NotAuthenticatedError()
 
-    bind_log_fields(workspace_id=1)
     return 1
 
 

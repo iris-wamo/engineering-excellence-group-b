@@ -3,7 +3,6 @@ from typing import Annotated
 from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
-from taskflow_shared.logging import bind_log_fields
 
 from app.auth.security import decode_access_token
 from app.core.exceptions import AuthenticationError, NotAuthenticatedError
@@ -30,7 +29,6 @@ async def get_current_user(
     if user is None or not user.is_active:
         raise NotAuthenticatedError()
 
-    bind_log_fields(user_id=user.id)
     return user
 
 
@@ -52,7 +50,6 @@ async def get_optional_current_user(
     user = await UserRepository.get_by_id(db, user_id)
     if user is None or not user.is_active:
         return None
-    bind_log_fields(user_id=user.id)
     return user
 
 

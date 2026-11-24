@@ -70,6 +70,7 @@ services:
       MONGO_URL: mongodb://mongo:27017
       MONGO_DB: ${MONGO_DB:-taskflow}
       REDIS_URL: redis://redis:6379/0
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4318
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
 
@@ -104,6 +105,7 @@ services:
       MONGO_URL: mongodb://mongo:27017
       MONGO_DB: ${MONGO_DB:-taskflow}
       REDIS_URL: redis://redis:6379/0
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4318
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
       # Pool processes write their metrics here and the main process serves the sum
@@ -180,6 +182,46 @@ services:
 
     healthcheck:
       disable: true
+
+  # Traces: spans from the api and worker over OTLP (published on localhost too, for `make run`).
+  # Viewed in Grafana (Explore > Tempo); there is no separate tracing UI.
+  tempo:
+    image: grafana/tempo:2.9.0
+    restart: unless-stopped
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    volumes:
+      - ./docker/tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
+    ports:
+      - "127.0.0.1:4318:4318"
+
+  # Metrics: scrapes api:8000/metrics and celery-worker:9808 (docker/prometheus/prometheus.yml)
+  prometheus:
+    image: prom/prometheus:v3.7.3
+    restart: unless-stopped
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "127.0.0.1:9090:9090"
+
+  # Dashboards and traces. The data sources and the TaskFlow dashboard are provisioned from
+  # docker/grafana, so nothing needs setting up by hand. Anonymous viewers are allowed
+  # (localhost only) and may use Explore, which is where traces are searched.
+  grafana:
+    image: grafana/grafana:12.2.1
+    restart: unless-stopped
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_VIEWERS_CAN_EDIT: "true"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/taskflow.json
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - prometheus
+      - tempo
 
 volumes:
   pgdata:

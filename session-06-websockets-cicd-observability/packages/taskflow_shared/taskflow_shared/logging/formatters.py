@@ -6,6 +6,8 @@ import re
 from datetime import UTC, datetime
 from typing import Any, Literal
 
+from opentelemetry import trace
+
 from taskflow_shared.logging.context import get_log_fields, get_request_id
 
 REDACTED = "[REDACTED]"
@@ -78,7 +80,7 @@ class RedactingFormatter(logging.Formatter):
 
 
 class JsonFormatter(logging.Formatter):
-    """One JSON object per line: time, level, logger, message, request id and bound fields.
+    """One JSON object per line: time, level, logger, message, request and trace ids, fields.
 
     Fields come from bind_log_fields (the current request or job) and from `extra=` on the
     logging call; `extra=` wins on a clash. Sensitive keys and credentials are redacted.
@@ -94,6 +96,11 @@ class JsonFormatter(logging.Formatter):
             "message": record.getMessage(),
             "request_id": get_request_id(),
         }
+        span_context = trace.get_current_span().get_span_context()
+        if span_context.is_valid:
+            # Same hex format Tempo uses, so a log line's trace_id can be pasted into Grafana
+            entry["trace_id"] = format(span_context.trace_id, "032x")
+            entry["span_id"] = format(span_context.span_id, "016x")
         entry.update(get_log_fields())
         entry.update(
             {

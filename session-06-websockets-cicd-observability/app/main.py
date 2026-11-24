@@ -11,6 +11,7 @@ from app.core.exceptions import register_exception_handlers
 from app.db.mongo import close_mongo_client, init_mongo_indexes
 from app.db.redis import close_redis_client
 from app.observability.metrics import metrics_endpoint
+from app.observability.tracing import instrument_api
 
 configure_logging(level=settings.log_level, style=settings.log_format)
 
@@ -36,3 +37,4 @@ app.add_middleware(RequestIdMiddleware)
 register_exception_handlers(app)
 app.include_router(api_router)
 app.add_route("/metrics", metrics_endpoint, include_in_schema=False)
+instrument_api(app)

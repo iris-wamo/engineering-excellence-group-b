@@ -1,4 +1,4 @@
-"""Per-request completion logs and Prometheus HTTP metrics."""
+"""Per-request completion logs, Prometheus HTTP metrics and OpenTelemetry tracing."""
 
 from taskflow_shared.observability.metrics import (
     HTTP_REQUEST_DURATION,
@@ -7,6 +7,7 @@ from taskflow_shared.observability.metrics import (
     method_label,
 )
 from taskflow_shared.observability.middleware import ObservabilityMiddleware, route_template
+from taskflow_shared.observability.tracing import configure_tracing, traced
 
 __all__ = [
     "HTTP_REQUESTS",
@@ -15,4 +16,6 @@ __all__ = [
     "method_label",
     "ObservabilityMiddleware",
     "route_template",
+    "configure_tracing",
+    "traced",
 ]

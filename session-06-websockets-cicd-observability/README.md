@@ -82,6 +82,8 @@ make docker-test-db
   `LOG_FORMAT=text` for the plain format
 - Metrics: API at <http://localhost:8000/metrics>, worker at <http://127.0.0.1:9808/metrics>
   (see [`docs/session-06/observability.md`](docs/session-06/observability.md))
+- Grafana: <http://127.0.0.1:3000> (TaskFlow overview dashboard; traces under Explore > Tempo).
+  Prometheus: <http://127.0.0.1:9090>
 
 The `.env.example` defaults point host commands at the Docker ports: PostgreSQL on **5433**,
 MongoDB on 27017 and Redis on 6379. To run without Docker, follow Steps 1–4 below.
@@ -105,6 +107,9 @@ Flower shows the jobs. The full trace, the failure cases and the tradeoffs are i
 | `celery-worker` | <http://127.0.0.1:9808/metrics> | Delivers notifications, runs the Beat sweeps | `make docker-logs s=celery-worker` |
 | `celery-beat` | | Queues the reminder sweep (60s) and the outbox sweep (300s) | `make docker-logs s=celery-beat` |
 | `flower` | <http://127.0.0.1:5555> | Workers, job history, retries and failures | Browser, log in with `FLOWER_BASIC_AUTH` |
+| `tempo` | (via Grafana) | Stores traces from the api and worker (OTLP on `127.0.0.1:4318`) | Grafana, Explore > Tempo |
+| `prometheus` | <http://127.0.0.1:9090> | Scrapes the api and worker metrics | Browser, or the Grafana dashboard |
+| `grafana` | <http://127.0.0.1:3000> | TaskFlow overview dashboard and trace search | Browser, no login needed |
 
 ```bash
 make docker-up

@@ -1,147 +1,102 @@
 # Demo 06 — Tracing and Dashboard
 
 ## Loom Video
-- **Loom Video Status**: **MANUAL FOLLOW-UP REQUIRED** (No Loom recording exists in the repository. A video link was not invented; record a 2–3 minute walkthrough and paste the URL here).
-- **Loom Link**: `[Manual Follow-up: Insert Loom recording URL here once recorded]`
-- **Recording Instructions**: Record a 2–3 minute walkthrough demonstrating:
-  1. The task summary endpoint returning the 4 required pieces of data.
-  2. Executing `uv run python scripts/demo_async_vs_blocking.py` to highlight the side-by-side concurrency timing table (2.43x speedup vs thread pool; ~7.5x vs loop starvation).
-  3. The simulated timeout case triggering an HTTP 504 Gateway Timeout with the standard ADR-001 error response envelope.
-
----
+Paste Loom link here.
 
 ## Objective
-Demonstrate the concrete engineering impact of asynchronous programming in FastAPI:
-1. Show how non-blocking I/O multiplexing (`asyncio.sleep`) allows multiple concurrent requests to overlap on a single thread.
-2. Demonstrate how synchronous blocking operations (`time.sleep`) offloaded to a bounded thread pool (`max_workers=4`) process in batches, and how accidental synchronous blocking directly inside `async def` starves the event loop (tested in `test_sync_call_inside_async_starves_event_loop`).
-3. Verify that external call timeouts prevent hung dependencies from starving application resources by returning a standard HTTP 504 error response envelope.
-
----
+Show where the time goes in one request, across the API, the database and the Celery worker, and
+show request rate, errors, latency and job outcomes on one dashboard under a controlled load.
 
 ## Scenario
-A project dashboard calls a `GET /api/v1/tasks/summary` endpoint to display task metrics (status breakdown, overdue count, assigned count) combined with health telemetry from a simulated external metrics microservice. We compare how the API behaves when multiple team members load their dashboards simultaneously under non-blocking async vs synchronous blocking execution.
-
----
+"Assigning a task feels slow." The metrics say the assign route's p95 went up, but not why. A trace
+of one assignment shows each SQL statement and the notification job it queued, and its trace id
+leads to the exact log lines on both the API and the worker.
 
 ## Commands / Steps Used
-
 ```bash
-# 1. Run integration tests (normal summary, blocking summary, timeouts, workspace isolation, concurrency)
-uv run pytest tests/integration/api/test_task_summary_api.py -v
+make docker-up                 # adds tempo, prometheus and grafana to the stack
+make flow-demo                 # one task assignment through the whole stack
 
-# 2. Run unit tests for Pydantic schemas
-uv run pytest tests/unit/schemas/test_task_summary_schema.py -v
+# Grafana: http://127.0.0.1:3000 (TaskFlow overview is the home dashboard)
+# Traces:  Explore > Tempo > TraceQL: {name="POST /api/v1/tasks/{task_id}/assign"}
 
-# 3. Execute the automated benchmark and demonstration script
-uv run python scripts/demo_async_vs_blocking.py --concurrency 10 --delay 0.2 --timeout 1.0
+# Join logs and traces by id
+docker compose logs api --no-log-prefix | grep '"trace_id": "<trace id>"'
+docker compose logs celery-worker --no-log-prefix | grep '<trace id>'
 
-# 4. Direct curl test — Normal async summary
-curl -s -X GET "http://localhost:8000/api/v1/tasks/summary?external_delay=0.2&external_timeout=1.0" \
-  -H "Authorization: Bearer <TOKEN>" \
-  -H "X-Workspace-ID: 1" | jq .
+# Controlled load, then watch the dashboard
+make load-test                 # 20 clients for 60 s against GET /api/v1/projects
 
-# 5. Direct curl test — External timeout trigger
-curl -s -X GET "http://localhost:8000/api/v1/tasks/summary?external_delay=1.5&external_timeout=0.5" \
-  -H "Authorization: Bearer <TOKEN>" \
-  -H "X-Workspace-ID: 1" | jq .
+# Prometheus targets
+curl -s 127.0.0.1:9090/api/v1/targets
 ```
-
----
 
 ## Expected Behavior
-1. **Async Endpoint (`/tasks/summary`)**:
-   Under 10 concurrent requests with 0.2s external delay, all requests should overlap on the asyncio event loop and complete in $\approx 0.2\text{s} - 0.3\text{s}$ total.
-2. **Blocking Endpoint (`/tasks/summary/blocking`)**:
-   Under 10 concurrent requests with 0.2s external delay, the blocking external call is offloaded to a bounded `ThreadPoolExecutor(max_workers=4)`. Because the pool is limited to 4 workers, requests process in batches ($4 + 4 + 2$), completing in $\approx 3 \times 0.2\text{s} \approx 0.65\text{s}$ total. (By contrast, un-offloaded synchronous calls directly inside `async def` starve the event loop thread, serializing to $\approx 10 \times 0.2\text{s} = 2.0\text{s}$, as demonstrated in `test_sync_call_inside_async_starves_event_loop`).
-3. **Timeout Case**:
-   When external delay exceeds the timeout threshold (e.g. 1.2s delay vs 0.5s timeout), the API should abort at the 0.5s deadline and return HTTP 504 with code `EXTERNAL_SERVICE_TIMEOUT`.
-
----
+- Prometheus scrapes both `api` and `celery-worker`; the dashboard and both data sources load
+  without manual setup.
+- One assignment produces a single trace with the request span, the `TaskService.assign_task`
+  span, a span per SQL statement, and the Celery job queued by the API and run by the worker.
+- The request's JSON log line carries the same `trace_id` as the trace.
+- The load test meets the target: p95 ≤ 200 ms and errors ≤ 1%.
 
 ## Actual Findings
-
-Execution of `scripts/demo_async_vs_blocking.py`:
-
-```
-===========================================================================
- SIDE-BY-SIDE PERFORMANCE COMPARISON SUMMARY
-===========================================================================
-Endpoint                           | Requests | Total Time   | Avg Latency
------------------------------------+----------+--------------+-------------
-GET /api/v1/tasks/summary (Async)  | 10       |     0.268s  |     0.255s
-GET /tasks/summary/blocking (Sync) | 10       |     0.653s  |     0.403s
----------------------------------------------------------------------------
-Concurrency Speedup: 2.43x faster with non-blocking async!
-```
-
----
+All of the above held on the local Docker stack (2026-11-15). The trace also showed that one
+assignment runs 13 `SELECT` statements in the API, which is worth a look in a later session.
 
 ## Evidence
+Prometheus targets and Grafana provisioning:
+```text
+api up
+celery-worker up
+dashboard: TaskFlow overview | panels: 10
+datasources: ['Prometheus', 'Tempo']
+```
 
-### 1. Successful Task Summary Response (HTTP 200 OK)
-All four required pieces of data returned:
+Tempo search for the assign route (from `make flow-demo`):
+```text
+f59fc892b552243dff2dc089e6eccb3e taskflow-api POST /api/v1/tasks/{task_id}/assign 342 ms
+```
+(342 ms is the whole trace, including the worker job that ran after the response; the request
+itself took 165 ms, as its log line below shows.)
+
+Spans in that trace (33 in total, grouped by service and name):
+```text
+taskflow-api     POST /api/v1/tasks/{task_id}/assign x1
+taskflow-api     TaskService.assign_task x1
+taskflow-api     connect x2
+taskflow-api     SELECT x13
+taskflow-api     INSERT x3
+taskflow-api     UPDATE x1
+taskflow-api     apply_async/app.tasks.notification_tasks.send_task_assignment_notification x1
+taskflow-api     POST /api/v1/tasks/{task_id}/assign http receive / http send x4
+taskflow-worker  run/app.tasks.notification_tasks.send_task_assignment_notification x1
+taskflow-worker  connect x1
+taskflow-worker  SELECT x4
+taskflow-worker  UPDATE x1
+```
+
+The request's log line, joined to the trace by id (3 worker log lines carry the same `trace_id`):
 ```json
-{
-  "workspace_id": 1,
-  "counts_by_status": {
-    "todo": 4,
-    "in_progress": 8,
-    "review": 0,
-    "done": 0
-  },
-  "overdue_count": 4,
-  "assigned_count": 12,
-  "total_count": 12,
-  "external_service": {
-    "service": "workload_service",
-    "status": "healthy",
-    "latency_ms": 201.1,
-    "mode": "async"
-  }
-}
+{"timestamp": "2026-11-15T09:52:24.450+00:00", "level": "INFO", "logger": "app.requests", "message": "POST /api/v1/tasks/{task_id}/assign 200", "request_id": "c5eb1bcb0d11478fa453fa18aedc9ebc", "trace_id": "f59fc892b552243dff2dc089e6eccb3e", "span_id": "703441bf5dedecc7", "user_id": 13, "workspace_id": 1, "task_id": 202, "operation": "POST /api/v1/tasks/{task_id}/assign", "outcome": "success", "status": 200, "duration_ms": 165.36}
 ```
 
-### 2. External Call Timeout Error Response (HTTP 504 Gateway Timeout)
-Enforced in 0.520s against a 1.2s delay:
-```json
-{
-  "error": {
-    "code": "EXTERNAL_SERVICE_TIMEOUT",
-    "message": "External service timed out",
-    "details": [
-      {
-        "field": "external_call",
-        "message": "Call exceeded the configured timeout of 0.5s"
-      }
-    ]
-  }
-}
+Load test (`make load-test`):
+```text
+GET http://localhost:8000/api/v1/projects with 20 clients for 60s ...
+requests: 25236  (420.6/s)
+latency ms: p50 41.4  p95 81.1  p99 169.6
+errors: 0 (0.00%)  4xx: 0
+target p95 <= 200 ms: met
+target errors <= 1%: met
 ```
+Prometheus over the same window: p95 96.2 ms, no 5xx. Recorded in
+[`docs/session-06/slo-and-deliverables.md`](../../../docs/session-06/slo-and-deliverables.md).
 
-### 3. Automated Test Suite Output
-```
-tests/integration/api/test_task_summary_api.py::test_async_task_summary_success_with_all_four_pieces_of_data PASSED
-tests/integration/api/test_task_summary_api.py::test_blocking_task_summary_success_matches_structure PASSED
-tests/integration/api/test_task_summary_api.py::test_async_summary_external_call_timeout_returns_504 PASSED
-tests/integration/api/test_task_summary_api.py::test_blocking_summary_external_call_timeout_returns_504 PASSED
-tests/integration/api/test_task_summary_api.py::test_summary_workspace_isolation PASSED
-tests/integration/api/test_task_summary_api.py::test_summary_empty_workspace_returns_zero_counts PASSED
-tests/integration/api/test_task_summary_api.py::test_async_summary_concurrency_non_blocking_behavior PASSED
-tests/integration/api/test_task_summary_api.py::test_task_summary_due_date_boundary_conditions PASSED
-tests/integration/api/test_task_summary_api.py::test_task_summary_query_parameter_validation PASSED
-============================== 9 passed in 1.04s ===============================
-```
-
----
+Screenshots: add the trace view (Explore > Tempo) and the dashboard during the load test.
 
 ## What We Learned
-1. **Async allows cooperative I/O multiplexing**: When operations yield via `await asyncio.sleep()`, the server handles concurrent requests on a single thread without CPU contention.
-2. **Blocking code in `async def` is fatal**: A single `time.sleep()` call or blocking library call freezes the entire worker process, creating head-of-line blocking for all subsequent requests.
-3. **Timeouts are critical fault barriers**: Without strict timeouts (`asyncio.wait_for`), slow downstream services cause connection pools to deplete and cascade failures back to the client.
-4. **Where async is NOT enough**: CPU-heavy tasks or long-running workflows (> 2-3s) cannot run safely inside API coroutines; they must be offloaded to Celery background workers.
-
----
+Fill in after recording.
 
 ## Open Questions
-1. **Caching (Issue #99)**: Should summary metrics be cached in Redis with a short TTL (e.g. 15–30s) or invalidated on task mutations (`create`, `status`, `assign`)?
-2. **Background Jobs (Issue #101)**: Should long-running data exports and batch reports be processed via Celery task queues instead of synchronous/asynchronous HTTP endpoints?
+- Should Redis task events carry a `traceparent` so their consumers join the request's trace?
+- Is 13 `SELECT`s for one assignment expected, or an N+1 to fix?

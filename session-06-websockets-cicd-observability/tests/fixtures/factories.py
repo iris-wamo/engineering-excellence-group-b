@@ -27,6 +27,7 @@ from app.models.enums import ProjectRole, TaskPriority, TaskStatus
 from app.models.project import Project
 from app.models.project_user import ProjectUser
 from app.models.task import Task
+from app.models.task_comment import TaskComment
 from app.models.user import User
 from app.models.workspace import Workspace
 from app.models.workspace_user import WorkspaceUser
@@ -157,6 +158,22 @@ class DataFactory:
                 status=status,
                 priority=priority,
                 due_date=due_date,
+            )
+        )
+
+    async def comment(
+        self,
+        task: Task,
+        user: User | int,
+        *,
+        content: str | None = None,
+    ) -> TaskComment:
+        n = self._next()
+        return await self._save(
+            TaskComment(
+                task_id=task.id,
+                user_id=user.id if isinstance(user, User) else user,
+                content=content or f"Comment {n}",
             )
         )
 

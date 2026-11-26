@@ -1,13 +1,14 @@
-# Release stacks: run one already-built image (IMAGE) as "staging" or simulated "production".
+# Release stacks: run one already-built image (IMAGE) as "local" (your machine) or "production"
+# (the GitHub Actions job in release-deploy.yml).
 # Standalone on purpose (not merged with compose.yaml / compose.override.yaml): no build
 # section, no source mounts, so the code that runs is exactly the code in the image.
 #
-# Driven by scripts/release.sh (make staging-deploy / promote / rollback), which runs:
+# Driven by scripts/release.sh (make release-deploy / rollback, or CI), which runs:
 #   docker compose -p taskflow-<env> -f compose.release.yaml --env-file .env.<env> ...
-# Each project name gets its own containers, network and volumes, so staging and
-# production never share data. See docs/session-06/ci-cd.md (Release).
+# Each project name gets its own containers, network and volumes, so the two
+# environments never share data. See docs/session-06/ci-cd.md (Release).
 #
-# Required variables (from .env.<env>, see .env.staging.example):
+# Required variables (from .env.<env>, see .env.local.example):
 #   IMAGE (set by the script), ENVIRONMENT, API_PORT, POSTGRES_PASSWORD, JWT_SECRET_KEY
 
 x-app-env: &app-env
@@ -72,8 +73,8 @@ services:
       timeout: 3s
       retries: 10
 
-  # One-shot. Not started by `up` (profile); scripts/release.sh runs it on deploy and
-  # promote, and never on rollback.
+  # One-shot. Not started by `up` (profile); scripts/release.sh runs it on every deploy
+  # and never on rollback.
   migrate:
     <<: *app-image
     restart: "no"
@@ -88,7 +89,7 @@ services:
     <<: *app-image
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
     environment: *app-env
-    # The only published port, on the host loopback (staging 8001, production 8002).
+    # The only published port, on the host loopback (local 8001, production 8002).
     ports:
       - "127.0.0.1:${API_PORT:?Set API_PORT in .env.<env>}:8000"
     # Replaces the image's /docs probe; start_interval lets `up --wait` see it healthy within

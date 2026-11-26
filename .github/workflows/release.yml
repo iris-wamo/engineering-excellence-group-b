@@ -5,14 +5,14 @@ name: Release
 # After every push to main that passed the "Session quality gate" workflow:
 #   build       one image per platform on native runners, pushed by digest only
 #   publish     one multi-arch image, tagged sha-<full commit sha>
-#   staging     run that digest on the runner (compose.release.yaml) and smoke test it
-#   production  wait for approval (GitHub environment "production"), then run the SAME digest
-#               and smoke test it again
+#   production  wait for approval (GitHub environment "production"), then run that digest on
+#               the runner (compose.release.yaml), migrate and smoke test it
 # A pushed v* git tag adds that version tag to the commit's existing image. It never rebuilds.
 #
-# Staging and production here are simulated: each job gets a fresh runner, so the database
-# starts empty and nothing persists between runs. Persistent stacks and rollback are run
-# locally with `make staging-deploy / promote / rollback` against the same images.
+# Two environments: local (your machine, `make release-deploy TAG=sha-<sha>`, where a tag is
+# tried and rollback practised) and production (this job). Production here is simulated: each
+# run gets a fresh runner, so the database starts empty and nothing persists between runs.
+# Rolling production back = running release-deploy.yml by hand with the previous good tag.
 on:
   workflow_run:
     workflows: ["Session quality gate"]
@@ -131,29 +131,16 @@ jobs:
           {
             echo "### Image"
             echo "- Tag: \`$IMAGE_REPO:$TAG\`"
-            echo "- Digest (deployed to staging and production): \`$IMAGE_REPO@$digest\`"
+            echo "- Digest (deployed to production): \`$IMAGE_REPO@$digest\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  staging:
-    name: Deploy to staging
+  production:
+    name: Deploy to production
     needs: publish
     uses: ./.github/workflows/release-deploy.yml
     with:
-      environment: staging
-      image: ${{ needs.publish.outputs.image }}
-      sha: ${{ github.event.workflow_run.head_sha }}
-    secrets: inherit
-    permissions:
-      contents: read
-      packages: read
-
-  production:
-    name: Promote to production
-    needs: [publish, staging]
-    uses: ./.github/workflows/release-deploy.yml
-    with:
       environment: production
-      # The digest staging passed, not a tag that could have moved since
+      # The digest just published, not a tag that could have moved since
       image: ${{ needs.publish.outputs.image }}
       sha: ${{ github.event.workflow_run.head_sha }}
     secrets: inherit

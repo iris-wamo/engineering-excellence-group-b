@@ -1,11 +1,14 @@
 name: Release deploy
 
-# One deploy, called by release.yml for staging and then production. Runs an already-pushed
-# image (by digest) with the same scripts/release.sh used locally, then smoke tests it.
+# One production deploy. Runs an already-pushed image with the same scripts/release.sh used
+# locally, then smoke tests it. Two ways in:
+#   - called by release.yml after every green push to main, with the new image's digest
+#   - run by hand (Actions > Release deploy > Run workflow, from main) with an existing tag:
+#     this is the rollback, e.g. tag = sha-<previous good commit>, or a v* release tag
 #
-# Configuration comes from the GitHub environment named in `environment`:
+# Configuration comes from the GitHub environment ("production"):
 #   secrets   POSTGRES_PASSWORD, JWT_SECRET_KEY, SMOKE_PASSWORD
-# "production" has a required reviewer, so this job waits for approval before it starts.
+# It has a required reviewer, so this job waits for approval before it starts, either way.
 on:
   workflow_call:
     inputs:
@@ -20,6 +23,12 @@ on:
         description: Commit the image was built from (for checkout of the deploy scripts)
         type: string
         required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Image tag to deploy to production (e.g. sha-<previous good commit>, v1.2.3)
+        type: string
+        required: true
 
 permissions: {}
 
@@ -28,26 +37,31 @@ env:
 
 jobs:
   deploy:
-    name: ${{ inputs.environment }}
+    name: ${{ inputs.environment || 'production' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment:
-      name: ${{ inputs.environment }}
+      name: ${{ inputs.environment || 'production' }}
     # One deploy per environment at a time. A newer run waiting here replaces an older waiting
-    # one, so an approver always promotes the latest green build.
+    # one, so an approver always approves the latest request.
     concurrency:
-      group: release-${{ inputs.environment }}
+      group: release-${{ inputs.environment || 'production' }}
       cancel-in-progress: false
     permissions:
       contents: read
       packages: read
+    env:
+      ENV_NAME: ${{ inputs.environment || 'production' }}
+      # A digest from release.yml, or the hand-picked tag (release.sh pins it to its digest)
+      IMAGE_REF: ${{ inputs.image || format('ghcr.io/iris-wamo/taskflow-api:{0}', inputs.tag) }}
     defaults:
       run:
         working-directory: ${{ env.CURRENT_SESSION }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.sha }}
+          # The image's commit when called from release.yml; main's deploy scripts on a rollback
+          ref: ${{ inputs.sha || github.sha }}
 
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
@@ -57,9 +71,8 @@ jobs:
 
       # Same keys as .env.<env>.example; the values only exist in the environment's secrets
       # and in this runner's (git-ignored) file, never in the image.
-      - name: Write .env.${{ inputs.environment }} from the environment's secrets
+      - name: Write .env.production from the environment's secrets
         env:
-          ENV_NAME: ${{ inputs.environment }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY }}
           SMOKE_PASSWORD: ${{ secrets.SMOKE_PASSWORD }}
@@ -78,15 +91,9 @@ jobs:
           } >> ".env.$ENV_NAME"
 
       - name: Deploy and smoke test
-        env:
-          ENV_NAME: ${{ inputs.environment }}
-          IMAGE_REF: ${{ inputs.image }}
         run: scripts/release.sh deploy "$ENV_NAME" "$IMAGE_REF"
 
       - name: Record the release
-        env:
-          ENV_NAME: ${{ inputs.environment }}
-          IMAGE_REF: ${{ inputs.image }}
         run: |
           {
             echo "### $ENV_NAME"
@@ -98,8 +105,6 @@ jobs:
 
       - name: Show logs on failure
         if: failure()
-        env:
-          ENV_NAME: ${{ inputs.environment }}
         run: |
           IMAGE=unused docker compose -p "taskflow-$ENV_NAME" -f compose.release.yaml \
             --env-file ".env.$ENV_NAME" logs --no-color --tail 200 api migrate

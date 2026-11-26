@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# Deploy, promote and roll back an already-built TaskFlow image on the local release stacks
-# (compose.release.yaml). Build once, deploy many: every command runs an existing image,
-# pinned by digest; nothing is built here. See docs/session-06/ci-cd.md (Release).
+# Deploy and roll back an already-built TaskFlow image on a release stack (compose.release.yaml).
+# Build once, deploy many: every command runs an existing image, pinned by digest; nothing is
+# built here. See docs/session-06/ci-cd.md (Release).
 #
-#   scripts/release.sh deploy <staging|production> <image>   migrate, start, smoke test
-#   scripts/release.sh promote                               staging's last good digest -> production
+# Two environments:
+#   local        your machine (make release-deploy / rollback): persistent, for trying a tag
+#   production   the GitHub Actions job in release-deploy.yml, after approval, on main only
+#
+#   scripts/release.sh deploy <local|production> <image>    migrate, start, smoke test
 #   scripts/release.sh rollback <env> [--downgrade-to REV]   previous good digest, no upgrade
 #   scripts/release.sh status [env]
 #   scripts/release.sh down <env>                            stop the stack (volumes are kept)
@@ -26,8 +29,8 @@ log() { printf '\n==> %s\n' "$*"; }
 
 check_env() {
   case "${1:-}" in
-    staging | production) ;;
-    *) die "environment must be 'staging' or 'production', got '${1:-}'" ;;
+    local | production) ;;
+    *) die "environment must be 'local' or 'production', got '${1:-}'" ;;
   esac
   [ -f ".env.$1" ] || die ".env.$1 not found. Create it: cp .env.$1.example .env.$1 (then set real secrets)"
 }
@@ -128,21 +131,15 @@ on_failure() {
   local status=$? env=$1
   [ "$status" -ne 0 ] || return 0
   echo "$(date -u +%FT%TZ) $env FAILED ${IMAGE:-?}" >> "$STATE_DIR/history.log"
+  local how_back="make rollback"
+  [ "$env" = local ] || how_back="run the Release deploy workflow with the previous good tag"
   cat >&2 <<EOF
 
 ==> [$env] DEPLOY FAILED: ${IMAGE:-?} is running but did not pass.
     Last good release: $(last_good "$env" || true)
-    Roll back:  make rollback ENV=$env
+    Roll back:  $how_back
     Logs:       docker compose -p taskflow-$env -f compose.release.yaml logs api
 EOF
-}
-
-promote() {
-  local image
-  image=$(last_good staging)
-  [ -n "$image" ] || die "staging has no release that passed the smoke test; deploy one first"
-  log "promoting staging's last good release to production: $image"
-  deploy production "$image"
 }
 
 rollback() {
@@ -159,7 +156,7 @@ rollback() {
 
   if [ -n "$current" ] && [ "$current" = "$good" ]; then
     # The running release passed its smoke test but is bad: go back to the one before it,
-    # and drop it from the good list so promote and later rollbacks never pick it again.
+    # and drop it from the good list so later rollbacks never pick it again.
     target=$(tail -n2 "$STATE_DIR/$env/good" | sed -n '1{N;P;}')
     [ -n "$target" ] || die "no earlier good release recorded for $env"
     sed -i.bak '$d' "$STATE_DIR/$env/good" && rm -f "$STATE_DIR/$env/good.bak"
@@ -179,7 +176,7 @@ rollback() {
 }
 
 status() {
-  local envs=${1:-"staging production"} env port
+  local envs=${1:-local} env port
   for env in $envs; do
     printf '\n[%s]\n  running:   %s\n  last good: %s\n' "$env" "$(running "$env")" "$(last_good "$env")"
     if [ -f ".env.$env" ]; then
@@ -191,9 +188,8 @@ status() {
 
 case "${1:-}" in
   deploy) [ $# -eq 3 ] || die "usage: $0 deploy <env> <image>"; deploy "$2" "$3" ;;
-  promote) promote ;;
   rollback) [ $# -ge 2 ] || die "usage: $0 rollback <env> [--downgrade-to REV]"; rollback "${@:2}" ;;
   status) status "${2:-}" ;;
   down) check_env "${2:-}"; IMAGE=unused compose "$2" down ;;
-  *) sed -n '2,17p' "$0"; exit 2 ;;
+  *) sed -n '2,20p' "$0"; exit 2 ;;
 esac

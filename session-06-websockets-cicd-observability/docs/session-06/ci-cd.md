@@ -14,8 +14,15 @@ Placeholder for Session 06 PR quality gate, image build, release and rollback no
 ## Release: build once, deploy many (#124)
 
 A green quality gate says the code passed its tests. It does not say the built image starts,
-migrates and serves real requests. The release pipeline builds one image per commit, runs that
-same image in staging and then production, smoke tests it in both, and gives a fast way back.
+migrates and serves real requests. The release pipeline builds one image per commit, deploys
+that same image to production after approval, smoke tests it there, and gives a fast way back.
+
+There are two environments:
+
+| Environment | Where | What it is for |
+|---|---|---|
+| **local** | your machine, `make release-deploy TAG=…` | run any published tag on a persistent stack, smoke test it, practise rollback and migrations |
+| **production** | GitHub Actions, environment `production`, main only | every green commit on main, after approval |
 
 ### The pipeline
 
@@ -25,8 +32,8 @@ merge to main
        └─ release.yml (workflow_run, only when the gate passed)
             build      linux/amd64 + linux/arm64 on native runners, pushed by digest
             publish    one multi-arch image: ghcr.io/iris-wamo/taskflow-api:sha-<full sha>
-            staging    release-deploy.yml: run the digest, migrate, smoke test
-            production release-deploy.yml: waits for approval, then the SAME digest + smoke test
+            production release-deploy.yml: waits for approval, then runs that digest,
+                       migrates and smoke tests it
 git tag v1.2.3 (on a commit already built from main)
   └─ release.yml: adds :v1.2.3 to that commit's existing image (no rebuild)
 ```
@@ -34,9 +41,9 @@ git tag v1.2.3 (on a commit already built from main)
 | Piece | Where |
 |---|---|
 | Image build and publish | `.github/workflows/release.yml` |
-| One deploy (staging or production) | `.github/workflows/release-deploy.yml` |
+| Production deploy, and production rollback (run by hand) | `.github/workflows/release-deploy.yml` |
 | Release stack | `compose.release.yaml` |
-| Deploy, promote, rollback | `scripts/release.sh`, `make staging-deploy / promote / rollback / release-status` |
+| Local deploy and rollback | `scripts/release.sh`, `make release-deploy / rollback / release-status / release-down` |
 | Smoke test | `scripts/smoke_test.py` (+ `docker/release/smoke-fixture.sql`), unit tests in `tests/unit/test_smoke_test.py` |
 | Which build is serving | `GET /version` → `{"version", "git_sha", "environment"}` |
 
@@ -44,33 +51,38 @@ git tag v1.2.3 (on a commit already built from main)
 commit into the image (`GIT_SHA`, `APP_VERSION`, OCI labels). `GET /version` reports it, and the
 smoke test fails if the container answering is not the build that was meant to be deployed.
 
-**Promotion is by digest.** Tags can be moved; a digest (`repo@sha256:…`) cannot. Staging and
-production both get the digest `publish` printed, so production runs exactly the bytes staging
-tested. Only configuration (environment variables) differs between them.
+**Deploys are by digest.** Tags can be moved; a digest (`repo@sha256:…`) cannot. Production
+gets the digest `publish` printed, and the local stack pins whatever tag it is given to its
+digest, so local and production run exactly the same bytes for the same tag. Only
+configuration (environment variables) differs between them.
 
 **Approval.** The `production` GitHub environment has a required reviewer, so the production job
-waits in the Actions UI until it is approved. Both environments only accept deployments from
-protected branches (main). A newer run waiting for approval replaces an older waiting one, so
-the approver always promotes the latest green build.
+waits in the Actions UI until it is approved, and it only accepts deployments from protected
+branches (main). A newer run waiting for approval replaces an older waiting one, so the
+approver always approves the latest green build.
 
-**Simulated, not hosted.** Each Actions job gets a fresh runner, so the CI "staging" and
-"production" start from an empty database and disappear afterwards. They prove the image
-migrates a fresh database, starts and serves the smoke test. Persistent stacks, where rollback
-matters, run locally with the same script and images:
+**Production rollback.** Run *Release deploy* by hand (Actions → Release deploy → Run workflow,
+from main) with the previous good tag, e.g. `sha-<previous commit>`. It goes through the same
+approval and smoke test. Production here is simulated: each run gets a fresh runner, so its
+database starts empty and disappears afterwards. The CI run proves the image migrates a fresh
+database, starts and passes the smoke test; it cannot show rollback against existing data.
+
+**Local, where rollback matters.** The local stack is persistent and uses the same script and
+images:
 
 ```bash
-cp .env.staging.example .env.staging         # then set real secrets (both files are git-ignored)
-cp .env.production.example .env.production
-make staging-deploy TAG=sha-<git sha>        # pull, migrate, start on 127.0.0.1:8001, smoke test
-make promote                                 # staging's last good digest → production (8002)
-make release-status                          # running / last good per environment + /version
-make rollback ENV=production                 # previous good digest, no migration
+cp .env.local.example .env.local             # then set real secrets (git-ignored)
+make release-deploy TAG=sha-<git sha>        # pull, migrate, start on 127.0.0.1:8001, smoke test
+make release-status                          # running / last good + what /version reports
+make rollback                                # previous good digest, no migration
+make release-down                            # stop it, keeping the data
 ```
 
-`scripts/release.sh` records, per environment, the image it last started (`running`) and every
-image that passed the smoke test (`good`) in `.release/<env>/`. `promote` only ever deploys
-staging's last **good** digest. A failed deploy exits non-zero and prints the rollback command;
-it does not roll back by itself, so a person sees the failure and the logs first.
+It runs with `ENVIRONMENT=staging`, so it gets production-like settings (the dev JWT secret is
+refused), and `/version` reports `staging`. `scripts/release.sh` records the image it last
+started (`running`) and every image that passed the smoke test (`good`) in `.release/<env>/`.
+A failed deploy exits non-zero and prints the rollback command; it does not roll back by
+itself, so a person sees the failure and the logs first.
 
 ### The smoke test
 
@@ -106,7 +118,7 @@ exit 255                                   # with restart: unless-stopped, a cra
 
 So the release stack does not use the entrypoint:
 
-- **Deploy and promote** run migrations once, in the one-shot `migrate` service, *before* the
+- **Deploy** runs migrations once, in the one-shot `migrate` service, *before* the
   new api starts. A failed migration stops the deploy with the old containers still running.
 - **Rollback** starts the previous image with **no migration step**. The database stays on the
   newer schema, so this only works if the old code runs against it.
@@ -122,7 +134,7 @@ with every earlier row intact.
 **When a downgrade is unavoidable** (the newer schema breaks the old code):
 
 ```bash
-make rollback ENV=production REV=<revision to go back to>
+make rollback REV=<revision to go back to>
 ```
 
 This first runs `alembic downgrade REV` with the **running (newer) image**, the only one that
@@ -137,8 +149,8 @@ to be tested, so this path exists, but it is the exception.
 | What | Local | CI |
 |---|---|---|
 | Dev defaults (`make docker-up`, tests) | `.env` from `.env.example` | `.env` from `.env.example` |
-| Staging / production config | `.env.staging`, `.env.production` (from the `*.example` files) | written by `release-deploy.yml` from the environment |
-| `POSTGRES_PASSWORD`, `JWT_SECRET_KEY`, `SMOKE_PASSWORD` | in those files | **secrets** of the `staging` / `production` GitHub environments |
+| Release config | `.env.local` (from `.env.local.example`) | `.env.production`, written by `release-deploy.yml` from `.env.production.example` + the environment's secrets |
+| `POSTGRES_PASSWORD`, `JWT_SECRET_KEY`, `SMOKE_PASSWORD` | in `.env.local` | **secrets** of the `production` GitHub environment |
 | Registry login | your `docker login ghcr.io` | `GITHUB_TOKEN` (`packages: write` only in the build jobs) |
 
 Nothing secret is built into the image:

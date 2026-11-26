@@ -1,6 +1,6 @@
 """Release smoke test: a few real API calls against a deployed stack.
 
-Run by scripts/release.sh after every deploy, promote and rollback (and by the release
+Run by scripts/release.sh after every deploy and rollback (and by the release
 workflow). Standard library only, so it runs on any host with Python 3.12, with or without
 the project's virtualenv. See docs/session-06/ci-cd.md (Release).
 

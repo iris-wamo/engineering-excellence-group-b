@@ -5,7 +5,7 @@ RELEASE_REPO ?= ghcr.io/iris-wamo/taskflow-api
 
 .PHONY: image
 image: ## Build the API image locally, labelled like CI does (taskflow-api:sha-<HEAD>)
-	docker build --build-arg GIT_SHA=$$(git rev-parse HEAD) --build-arg APP_VERSION=sha-$$(git rev-parse --short HEAD) -t taskflow-api:sha-$$(git rev-parse HEAD) .
+	docker build --build-arg GIT_SHA=$$(git rev-parse HEAD) --build-arg APP_VERSION=sha-$$(git rev-parse HEAD) -t taskflow-api:sha-$$(git rev-parse HEAD) .
 
 .PHONY: release-deploy
 release-deploy: ## Run an image on the local release stack, migrate and smoke test (TAG=sha-<sha>|v1.2.3, or IMAGE=<full ref>)

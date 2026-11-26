@@ -12,7 +12,7 @@
 #   IMAGE (set by the script), ENVIRONMENT, API_PORT, POSTGRES_PASSWORD, JWT_SECRET_KEY
 
 x-app-env: &app-env
-  ENVIRONMENT: ${ENVIRONMENT:?Set ENVIRONMENT (staging or production) in .env.<env>}
+  ENVIRONMENT: ${ENVIRONMENT:?Set ENVIRONMENT (staging for the local stack, production in CI) in .env.<env>}
   DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-taskflow}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.<env>}@db:5432/${POSTGRES_DB:-taskflow}
   MONGO_URL: mongodb://mongo:27017
   MONGO_DB: ${MONGO_DB:-taskflow}

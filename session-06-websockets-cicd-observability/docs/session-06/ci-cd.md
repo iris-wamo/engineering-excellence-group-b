@@ -1,12 +1,14 @@
 # CI/CD and Release Engineering
 
 ## Overview
-Placeholder for Session 06 PR quality gate, image build, release and rollback notes.
+How a change gets from a pull request to a running release in Session 06: the PR quality gate
+that has to pass first, then one image built per commit on main, deployed by digest to
+production after approval, smoke tested, and rolled back when it misbehaves.
 
 ## Topics Covered
 - PR quality gate and required checks
 - Workflow caching, version pinning and reproducibility
-- Tagged image build, staged promotion and rollback
+- Tagged image build, approved production deploy and rollback
 - Migrations during release and rollback
 - Secrets and environment configuration
 - What a green pipeline does not prove
@@ -81,19 +83,25 @@ make release-down                            # stop it, keeping the data
 It runs with `ENVIRONMENT=staging`, so it gets production-like settings (the dev JWT secret is
 refused), and `/version` reports `staging`. `scripts/release.sh` records the image it last
 started (`running`) and every image that passed the smoke test (`good`) in `.release/<env>/`.
-A failed deploy exits non-zero and prints the rollback command; it does not roll back by
-itself, so a person sees the failure and the logs first.
+A failed deploy exits non-zero, adds a `FAILED` line to `.release/history.log` and does not
+roll back by itself, so a person sees the failure and the logs first. What it prints depends on
+where it failed: before the api was replaced (starting the databases or migrating) the previous
+release is still serving and there is nothing to roll back; once the new api has started (an
+unhealthy api or a failed smoke test) it prints `make rollback` and the command for the api
+logs. `running` is only written at that point, so it always names what the api really runs.
 
 ### The smoke test
 
 A handful of real calls a user makes, against the deployed stack, in order (any failure stops
 the run and fails the deploy):
 
-1. `GET /version` answers and reports the expected commit
-2. a bad token gets `401` with the error envelope
-3. sign up (idempotent) and log in
-4. create a task, assign it to the smoke user, move it `todo → in_progress`
-5. the task list shows the new status; a missing task gets `404` with the error envelope
+1. sign up (idempotent) and log in, proving the account is ours (`signup` phase)
+2. `docker/release/smoke-fixture.sql` gives the smoke user its project (see below)
+3. `GET /version` answers and reports the expected commit (`check` phase from here)
+4. a bad token gets `401` with the error envelope
+5. log in, then `GET /auth/me` with the token
+6. create a task, assign it to the smoke user, move it `todo → in_progress`
+7. the task list shows the new status; a missing task gets `404` with the error envelope
 
 Creating a project needs the admin role, and a fresh database has no admin, so
 `docker/release/smoke-fixture.sql` gives the smoke user one dedicated project

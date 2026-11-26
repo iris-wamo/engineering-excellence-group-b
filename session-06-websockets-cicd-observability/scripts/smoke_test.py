@@ -1,8 +1,8 @@
 """Release smoke test: a few real API calls against a deployed stack.
 
 Run by scripts/release.sh after every deploy and rollback (and by the release
-workflow). Standard library only, so it runs on any host with Python 3.12, with or without
-the project's virtualenv. See docs/session-06/ci-cd.md (Release).
+workflow). Standard library only, so it runs on any host with Python 3.9+ (macOS's system
+python3 included), with or without the project's virtualenv. See docs/session-06/ci-cd.md (Release).
 
 Two phases, because the smoke user needs a project it owns and a fresh database has no admin
 who could create one over the API (release.sh runs docker/release/smoke-fixture.sql between
@@ -15,6 +15,8 @@ them):
 Credentials come from SMOKE_EMAIL / SMOKE_PASSWORD. Exit code 0 means every check passed.
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -24,7 +26,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Optional
 
 TIMEOUT_SECONDS = 10.0
 
@@ -36,7 +38,8 @@ class HttpResult:
 
 
 # (method, path, json body or None, headers) -> result. Swapped for a fake in the unit tests.
-Transport = Callable[[str, str, dict[str, Any] | None, dict[str, str]], HttpResult]
+# Optional, not `X | None`: this alias is evaluated at runtime, and `|` needs Python 3.10.
+Transport = Callable[[str, str, Optional[dict[str, Any]], dict[str, str]], HttpResult]  # noqa: UP045
 
 
 def urllib_transport(base_url: str) -> Transport:

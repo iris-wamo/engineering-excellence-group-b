@@ -144,8 +144,8 @@ $ ls -a /app → .venv alembic alembic.ini app packages;   no .env file anywhere
    rollback a plain redeploy; anything else needs a downgrade, a backup and luck.
 3. **Running migrations in the entrypoint couples "start" to "migrate".** Fine for local
    development, but the previous image cannot start at all once the database is ahead of it.
-4. **Pin by digest.** A tag says what a build was called; a digest says what it is. Promotion
-   and rollback both use digests so nothing can change under them.
+4. **Pin by digest.** A tag says what a build was called; a digest says what it is. Deploys
+   and rollbacks both use digests so nothing can change under them.
 
 ## Open questions
 1. Should a failed deploy roll back automatically? Today it stops and prints the command, so a

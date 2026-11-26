@@ -15,7 +15,7 @@
 # <image> is anything `docker pull`/`docker run` accepts, e.g. ghcr.io/iris-wamo/taskflow-api:sha-<sha>.
 #
 # State lives in .release/<env>/ (git-ignored):
-#   running   the image the stack was last started with (smoke passed or not)
+#   running   the image the api was last started with (smoke passed or not)
 #   good      every image that passed the smoke test there, oldest first
 set -euo pipefail
 
@@ -37,7 +37,10 @@ check_env() {
 
 # Reads one KEY from .env.<env> without sourcing it (values may contain shell characters).
 env_value() {
-  grep -E "^$2=" ".env.$1" | tail -n1 | cut -d= -f2-
+  local line
+  line=$(grep -E "^$2=" ".env.$1" | tail -n1) || true
+  [ -n "$line" ] || die "$2 is not set in .env.$1"
+  printf '%s\n' "${line#*=}"
 }
 
 compose() {
@@ -99,8 +102,11 @@ deploy() {
 
   log "[$env] deploying $image (git sha: $(image_git_sha "$image" || echo unknown))"
   # Any failure from here on (a failing command under set -e, or die) exits the script;
-  # the trap records it and prints how to roll back.
-  trap 'on_failure "$env"' EXIT
+  # the trap records it and prints how to roll back. $env is expanded now, not when the trap
+  # fires: by then deploy's locals are gone and set -u would abort the handler. (check_env
+  # has limited it to local|production, so it needs no quoting.)
+  API_REPLACED=0
+  trap "on_failure $env" EXIT
 
   compose "$env" up -d --wait --wait-timeout "$WAIT_TIMEOUT" db mongo redis
   if [ "$migrate" = "--no-migrate" ]; then
@@ -111,6 +117,8 @@ deploy() {
   fi
 
   log "[$env] starting api, celery-worker, celery-beat"
+  # From here the old api is being replaced: a failure now leaves this image running.
+  API_REPLACED=1
   echo "$image" > "$STATE_DIR/$env/running"
   # --wait needs a healthcheck: only the api has one (the workers serve no HTTP)
   compose "$env" up -d --wait --wait-timeout "$WAIT_TIMEOUT" api
@@ -131,6 +139,20 @@ on_failure() {
   local status=$? env=$1
   [ "$status" -ne 0 ] || return 0
   echo "$(date -u +%FT%TZ) $env FAILED ${IMAGE:-?}" >> "$STATE_DIR/history.log"
+  local logs="IMAGE=unused docker compose -p taskflow-$env -f compose.release.yaml --env-file .env.$env logs"
+  if [ "${API_REPLACED:-0}" -eq 0 ]; then
+    # Failed while starting db/mongo/redis or migrating: the previous api was never touched.
+    local previous
+    previous=$(running "$env")
+    cat >&2 <<EOF
+
+==> [$env] DEPLOY FAILED before the api was replaced: ${IMAGE:-?} never started.
+    Still serving:  ${previous:-nothing (no earlier release)}
+    Nothing to roll back; fix the cause and deploy again.
+    Logs:           $logs migrate
+EOF
+    return 0
+  fi
   local how_back="make rollback"
   [ "$env" = local ] || how_back="run the Release deploy workflow with the previous good tag"
   cat >&2 <<EOF
@@ -138,7 +160,7 @@ on_failure() {
 ==> [$env] DEPLOY FAILED: ${IMAGE:-?} is running but did not pass.
     Last good release: $(last_good "$env" || true)
     Roll back:  $how_back
-    Logs:       docker compose -p taskflow-$env -f compose.release.yaml logs api
+    Logs:       $logs api
 EOF
 }
 
@@ -156,10 +178,12 @@ rollback() {
 
   if [ -n "$current" ] && [ "$current" = "$good" ]; then
     # The running release passed its smoke test but is bad: go back to the one before it,
-    # and drop it from the good list so later rollbacks never pick it again.
+    # and drop it from the good list first, so no later rollback picks it again, even if this
+    # redeploy fails (then running != last good, and the next rollback retries the target).
     target=$(tail -n2 "$STATE_DIR/$env/good" | sed -n '1{N;P;}')
     [ -n "$target" ] || die "no earlier good release recorded for $env"
-    sed -i.bak '$d' "$STATE_DIR/$env/good" && rm -f "$STATE_DIR/$env/good.bak"
+    local list="$STATE_DIR/$env/good"
+    sed '$d' "$list" > "$list.tmp" && mv "$list.tmp" "$list"
   else
     # The running release never passed: the last good one is the way back.
     target=$good

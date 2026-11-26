@@ -85,7 +85,10 @@ the run and fails the deploy):
 
 Creating a project needs the admin role, and a fresh database has no admin, so
 `docker/release/smoke-fixture.sql` gives the smoke user one dedicated project
-(`release-smoke-test`). Smoke data stays in that project and is safe to ignore.
+(`release-smoke-test`). Smoke data stays in that project and is safe to ignore. Signup is
+public, so anyone could register the smoke email first: the signup phase therefore only
+continues if logging in with `SMOKE_PASSWORD` works, and the fixture never grants the project
+to an account that is not ours (a pre-registered email fails the deploy instead).
 `scripts/seed_data.py` is never used here: it truncates every table.
 
 ### Rollback and migrations
@@ -144,6 +147,12 @@ Nothing secret is built into the image:
   only `app/`, `packages/`, `alembic/`, `alembic.ini` and the virtualenv;
 - the only build arguments are `GIT_SHA` and `APP_VERSION`;
 - `Settings` refuses to start as `staging` or `production` with the dev `JWT_SECRET_KEY`.
+
+Release stacks also turn off two development conveniences: `ALLOW_ANONYMOUS_DEFAULT_WORKSPACE`
+is `false` (unauthenticated requests get `401` instead of acting in Workspace 1), and the api
+port is published on `127.0.0.1` only. `/metrics` is served on that same port without a token
+here; anywhere the api is reachable from outside, set `METRICS_TOKEN` as another environment
+secret.
 
 Checked on a built image: `docker image inspect` lists only the build identity and the Python
 base image's variables (`GPG_KEY` there is the public key id of the CPython release signer),

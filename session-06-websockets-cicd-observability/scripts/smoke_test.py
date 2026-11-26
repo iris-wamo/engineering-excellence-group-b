@@ -89,8 +89,22 @@ class Smoke:
             {"name": "Release Smoke", "email": self.email, "password": self.password},
             {},
         )
-        # 409: an earlier deploy already created the account
+        # 409: the account exists, from an earlier deploy or from anyone else who signed up
+        # with this email. release.sh grants the account a project right after this phase,
+        # so prove it is ours first: it must accept SMOKE_PASSWORD.
         self.expect(result.status in (201, 409), "smoke user exists (signup)", result)
+        self.login()
+
+    def login(self) -> dict[str, str]:
+        """Log in as the smoke user and return the Authorization header."""
+        login = self.send(
+            "POST", "/api/v1/auth/login", {"email": self.email, "password": self.password}, {}
+        )
+        token = login.body.get("access_token") if isinstance(login.body, dict) else None
+        self.expect(
+            login.status == 200 and bool(token), "login as the smoke user returns a token", login
+        )
+        return {"Authorization": f"Bearer {token}"}
 
     def check(self, project_id: int, expect_sha: str | None) -> None:
         version = self.send("GET", "/version", None, {})
@@ -110,12 +124,7 @@ class Smoke:
             bad,
         )
 
-        login = self.send(
-            "POST", "/api/v1/auth/login", {"email": self.email, "password": self.password}, {}
-        )
-        token = login.body.get("access_token") if isinstance(login.body, dict) else None
-        self.expect(login.status == 200 and bool(token), "login returns an access token", login)
-        auth = {"Authorization": f"Bearer {token}"}
+        auth = self.login()
 
         me = self.send("GET", "/api/v1/auth/me", None, auth)
         self.expect(me.status == 200, "GET /auth/me with the token", me)

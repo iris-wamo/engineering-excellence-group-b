@@ -90,6 +90,16 @@ def test_error_without_the_envelope_fails() -> None:
         _smoke(api).check(project_id=1, expect_sha=None)
 
 
+def test_signup_refuses_an_account_registered_by_someone_else() -> None:
+    """A 409 is only fine if SMOKE_PASSWORD works; otherwise the fixture must not run."""
+    api = FakeApi()
+    api.overrides[("POST", "/api/v1/auth/signup")] = HttpResult(409, ENVELOPE)
+    api.overrides[("POST", "/api/v1/auth/login")] = HttpResult(401, ENVELOPE)
+
+    with pytest.raises(SmokeFailure, match="login as the smoke user"):
+        _smoke(api).signup()
+
+
 @pytest.mark.parametrize(("status", "ok"), [(201, True), (409, True), (500, False)])
 def test_signup_accepts_an_existing_account(status: int, ok: bool) -> None:
     api = FakeApi()

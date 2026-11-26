@@ -20,6 +20,9 @@ x-app-env: &app-env
   CELERY_RESULT_BACKEND: redis://redis:6379/2
   # Settings refuses to start outside development/testing with the dev default
   JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY in .env.<env>}
+  # The dev default lets unauthenticated requests act in Workspace 1 (a known limitation,
+  # docs/session-04/multi-tenancy-architecture.md). Release stacks require a login.
+  ALLOW_ANONYMOUS_DEFAULT_WORKSPACE: "false"
   # No OTEL_EXPORTER_OTLP_ENDPOINT: these stacks run no collector, so tracing is a no-op
 
 x-app-image: &app-image

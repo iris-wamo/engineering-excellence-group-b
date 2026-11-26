@@ -16,8 +16,12 @@ on:
 permissions:
   contents: read
 
+# PRs: one run per branch, a new push cancels the old one. Pushes to main: one group per
+# commit, so no run is ever replaced. In a shared group a third quick merge would cancel the
+# second one's pending run, and the release workflow (which builds an image for every green
+# run on main) would skip that commit.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:

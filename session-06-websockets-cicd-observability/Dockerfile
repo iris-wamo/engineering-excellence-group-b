@@ -49,6 +49,18 @@ COPY --from=builder /app/alembic.ini ./
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
+# Build identity (see docs/session-06/ci-cd.md). Declared last so a new commit only rebuilds
+# these metadata layers. Nothing secret is passed at build time: configuration and secrets
+# arrive as environment variables when the container starts.
+ARG APP_VERSION=dev
+ARG GIT_SHA=unknown
+LABEL org.opencontainers.image.title="taskflow-api" \
+      org.opencontainers.image.source="https://github.com/iris-wamo/engineering-excellence-group-b" \
+      org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.revision="${GIT_SHA}"
+ENV APP_VERSION=${APP_VERSION} \
+    GIT_SHA=${GIT_SHA}
+
 USER app
 
 EXPOSE 8000

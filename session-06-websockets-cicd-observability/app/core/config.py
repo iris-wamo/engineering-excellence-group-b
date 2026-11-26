@@ -66,6 +66,11 @@ class Settings(BaseAppSettings):
         """
         return max(60, int(self.due_reminder_interval_seconds * 5))
 
+    # Build identity, baked into the image by the Dockerfile (APP_VERSION and GIT_SHA build
+    # args) and reported by GET /version, so a deploy can check which build is serving.
+    app_version: str = "dev"
+    git_sha: str = "unknown"
+
     # JWT access tokens. Override jwt_secret_key via the environment in production.
     jwt_secret_key: str = "dev-only-secret-change-in-production"
     jwt_algorithm: str = "HS256"

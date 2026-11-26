@@ -1,0 +1,137 @@
+# Release stacks: run one already-built image (IMAGE) as "staging" or simulated "production".
+# Standalone on purpose (not merged with compose.yaml / compose.override.yaml): no build
+# section, no source mounts, so the code that runs is exactly the code in the image.
+#
+# Driven by scripts/release.sh (make staging-deploy / promote / rollback), which runs:
+#   docker compose -p taskflow-<env> -f compose.release.yaml --env-file .env.<env> ...
+# Each project name gets its own containers, network and volumes, so staging and
+# production never share data. See docs/session-06/ci-cd.md (Release).
+#
+# Required variables (from .env.<env>, see .env.staging.example):
+#   IMAGE (set by the script), ENVIRONMENT, API_PORT, POSTGRES_PASSWORD, JWT_SECRET_KEY
+
+x-app-env: &app-env
+  ENVIRONMENT: ${ENVIRONMENT:?Set ENVIRONMENT (staging or production) in .env.<env>}
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-taskflow}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.<env>}@db:5432/${POSTGRES_DB:-taskflow}
+  MONGO_URL: mongodb://mongo:27017
+  MONGO_DB: ${MONGO_DB:-taskflow}
+  REDIS_URL: redis://redis:6379/0
+  CELERY_BROKER_URL: redis://redis:6379/1
+  CELERY_RESULT_BACKEND: redis://redis:6379/2
+  # Settings refuses to start outside development/testing with the dev default
+  JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY in .env.<env>}
+  # No OTEL_EXPORTER_OTLP_ENDPOINT: these stacks run no collector, so tracing is a no-op
+
+x-app-image: &app-image
+  image: ${IMAGE:?Set IMAGE to the image to deploy (scripts/release.sh does this)}
+  restart: unless-stopped
+  # The image entrypoint runs `alembic upgrade head` before starting. Release stacks skip it:
+  # migrations run once, explicitly, in the `migrate` service below, and a rollback starts the
+  # previous image without migrating (that image cannot know newer revisions).
+  entrypoint: []
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-taskflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.<env>}
+      POSTGRES_DB: ${POSTGRES_DB:-taskflow}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER:-taskflow} -d ${POSTGRES_DB:-taskflow}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mongo:
+    image: mongo:7.0
+    restart: unless-stopped
+    volumes:
+      - mongodata:/data/db
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval 'db.adminCommand(\"ping\")'"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # One-shot. Not started by `up` (profile); scripts/release.sh runs it on deploy and
+  # promote, and never on rollback.
+  migrate:
+    <<: *app-image
+    restart: "no"
+    profiles: [migrate]
+    command: ["alembic", "upgrade", "head"]
+    environment: *app-env
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    <<: *app-image
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment: *app-env
+    # The only published port, on the host loopback (staging 8001, production 8002).
+    ports:
+      - "127.0.0.1:${API_PORT:?Set API_PORT in .env.<env>}:8000"
+    # Replaces the image's /docs probe; start_interval lets `up --wait` see it healthy within
+    # seconds instead of one 30 s interval.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/version', timeout=2)"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 60s
+      start_interval: 2s
+    depends_on:
+      db:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery-worker:
+    <<: *app-image
+    command: ["celery", "-A", "app.core.celery_app", "worker", "-l", "info"]
+    environment:
+      <<: *app-env
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus-worker
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+
+  celery-beat:
+    <<: *app-image
+    command: ["celery", "-A", "app.core.celery_app", "beat", "-l", "info", "--schedule", "/tmp/celerybeat-schedule"]
+    environment: *app-env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+
+volumes:
+  pgdata:
+  mongodata:
+  redisdata:

@@ -10,8 +10,8 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from taskflow_shared.observability import configure_tracing
 
-# Scrapes, the docs and the container healthcheck would only add noise
-UNTRACED_URLS = "/metrics$,/docs,/openapi.json"
+# Scrapes, deploy checks, the docs and the container healthcheck would only add noise
+UNTRACED_URLS = "/metrics$,/version$,/docs,/openapi.json"
 
 
 def instrument_api(app: FastAPI) -> None:

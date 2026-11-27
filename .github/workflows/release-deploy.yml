@@ -1,0 +1,110 @@
+name: Release deploy
+
+# One production deploy. Runs an already-pushed image with the same scripts/release.sh used
+# locally, then smoke tests it. Two ways in:
+#   - called by release.yml after every green push to main, with the new image's digest
+#   - run by hand (Actions > Release deploy > Run workflow, from main) with an existing tag:
+#     this is the rollback, e.g. tag = sha-<previous good commit>, or a v* release tag
+#
+# Configuration comes from the GitHub environment ("production"):
+#   secrets   POSTGRES_PASSWORD, JWT_SECRET_KEY, SMOKE_PASSWORD
+# It has a required reviewer, so this job waits for approval before it starts, either way.
+on:
+  workflow_call:
+    inputs:
+      environment:
+        type: string
+        required: true
+      image:
+        description: Image to deploy, pinned by digest (repo@sha256:...)
+        type: string
+        required: true
+      sha:
+        description: Commit the image was built from (for checkout of the deploy scripts)
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Image tag to deploy to production (e.g. sha-<previous good commit>, v1.2.3)
+        type: string
+        required: true
+
+permissions: {}
+
+env:
+  CURRENT_SESSION: session-06-websockets-cicd-observability
+
+jobs:
+  deploy:
+    name: ${{ inputs.environment || 'production' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment:
+      name: ${{ inputs.environment || 'production' }}
+    # One deploy per environment at a time. A newer run waiting here replaces an older waiting
+    # one, so an approver always approves the latest request.
+    concurrency:
+      group: release-${{ inputs.environment || 'production' }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: read
+    env:
+      ENV_NAME: ${{ inputs.environment || 'production' }}
+      # A digest from release.yml, or the hand-picked tag (release.sh pins it to its digest)
+      IMAGE_REF: ${{ inputs.image || format('ghcr.io/iris-wamo/taskflow-api:{0}', inputs.tag) }}
+    defaults:
+      run:
+        working-directory: ${{ env.CURRENT_SESSION }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The image's commit when called from release.yml; main's deploy scripts on a rollback
+          ref: ${{ inputs.sha || github.sha }}
+
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Same keys as .env.<env>.example; the values only exist in the environment's secrets
+      # and in this runner's (git-ignored) file, never in the image.
+      - name: Write .env.production from the environment's secrets
+        env:
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY }}
+          SMOKE_PASSWORD: ${{ secrets.SMOKE_PASSWORD }}
+        run: |
+          for name in POSTGRES_PASSWORD JWT_SECRET_KEY SMOKE_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "::error title=Missing secret::Set $name in the '$ENV_NAME' environment's secrets."
+              exit 1
+            fi
+          done
+          grep -vE '^(POSTGRES_PASSWORD|JWT_SECRET_KEY|SMOKE_PASSWORD)=' ".env.$ENV_NAME.example" > ".env.$ENV_NAME"
+          {
+            echo "POSTGRES_PASSWORD=$POSTGRES_PASSWORD"
+            echo "JWT_SECRET_KEY=$JWT_SECRET_KEY"
+            echo "SMOKE_PASSWORD=$SMOKE_PASSWORD"
+          } >> ".env.$ENV_NAME"
+
+      - name: Deploy and smoke test
+        run: scripts/release.sh deploy "$ENV_NAME" "$IMAGE_REF"
+
+      - name: Record the release
+        run: |
+          {
+            echo "### $ENV_NAME"
+            echo "Smoke test passed on \`$IMAGE_REF\`"
+            echo '```'
+            scripts/release.sh status "$ENV_NAME"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          IMAGE=unused docker compose -p "taskflow-$ENV_NAME" -f compose.release.yaml \
+            --env-file ".env.$ENV_NAME" logs --no-color --tail 200 api migrate

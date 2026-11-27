@@ -1,0 +1,179 @@
+name: Release
+
+# Build once, deploy many (see docs/session-06/ci-cd.md in the current session, "Release").
+#
+# After every push to main that passed the "Session quality gate" workflow:
+#   build       one image per platform on native runners, pushed by digest only
+#   publish     one multi-arch image, tagged sha-<full commit sha>
+#   production  wait for approval (GitHub environment "production"), then run that digest on
+#               the runner (compose.release.yaml), migrate and smoke test it
+# A pushed v* git tag adds that version tag to the commit's existing image. It never rebuilds.
+#
+# Two environments: local (your machine, `make release-deploy TAG=sha-<sha>`, where a tag is
+# tried and rollback practised) and production (this job). Production here is simulated: each
+# run gets a fresh runner, so the database starts empty and nothing persists between runs.
+# Rolling production back = running release-deploy.yml by hand with the previous good tag.
+on:
+  workflow_run:
+    workflows: ["Session quality gate"]
+    types: [completed]
+    branches: [main]
+  push:
+    tags: ["v*"]
+
+permissions: {}
+
+env:
+  # UPDATE THIS when a new session is forked from the previous one
+  # (see "Forking a new session" in the root README).
+  CURRENT_SESSION: session-06-websockets-cicd-observability
+  # GHCR names must be lowercase
+  IMAGE_REPO: ghcr.io/iris-wamo/taskflow-api
+
+jobs:
+  build:
+    name: Build (${{ matrix.platform }})
+    # Only a green quality gate on a push to main from this repository (never a fork's PR,
+    # whose workflow_run would otherwise reach this job with the repository's secrets).
+    if: >-
+      github.event_name == 'workflow_run'
+      && github.event.workflow_run.conclusion == 'success'
+      && github.event.workflow_run.event == 'push'
+      && github.event.workflow_run.head_repository.full_name == github.repository
+    strategy:
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The commit the quality gate checked, not whatever main points at now
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # No tag yet: each platform is pushed by digest, and `publish` joins them under one tag.
+      # Build args carry only the commit identity; no secret is passed to the build.
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ env.CURRENT_SESSION }}
+          platforms: ${{ matrix.platform }}
+          build-args: |
+            GIT_SHA=${{ github.event.workflow_run.head_sha }}
+            APP_VERSION=sha-${{ github.event.workflow_run.head_sha }}
+          outputs: type=image,name=${{ env.IMAGE_REPO }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+
+      - name: Save the digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: digest-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/digests/*
+          retention-days: 1
+
+  publish:
+    name: Publish sha tag
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      packages: write
+    outputs:
+      image: ${{ steps.manifest.outputs.image }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: digest-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/digests
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create the multi-arch sha tag
+        id: manifest
+        working-directory: ${{ runner.temp }}/digests
+        env:
+          TAG: sha-${{ github.event.workflow_run.head_sha }}
+        run: |
+          docker buildx imagetools create -t "$IMAGE_REPO:$TAG" \
+            $(printf "$IMAGE_REPO@sha256:%s " *)
+          digest=$(docker buildx imagetools inspect "$IMAGE_REPO:$TAG" --format '{{json .Manifest}}' | jq -r .digest)
+          echo "image=$IMAGE_REPO@$digest" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Image"
+            echo "- Tag: \`$IMAGE_REPO:$TAG\`"
+            echo "- Digest (deployed to production): \`$IMAGE_REPO@$digest\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  production:
+    name: Deploy to production
+    needs: publish
+    uses: ./.github/workflows/release-deploy.yml
+    with:
+      environment: production
+      # The digest just published, not a tag that could have moved since
+      image: ${{ needs.publish.outputs.image }}
+      sha: ${{ github.event.workflow_run.head_sha }}
+    secrets: inherit
+    permissions:
+      contents: read
+      packages: read
+
+  version-tag:
+    name: Tag release ${{ github.ref_name }}
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      packages: write
+    steps:
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # github.sha is the tagged commit. Its image exists only if that commit was merged to
+      # main and passed the quality gate; otherwise this fails instead of building one.
+      - name: Add the version tag to the commit's image
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          source="$IMAGE_REPO:sha-$GITHUB_SHA"
+          if ! docker buildx imagetools inspect "$source" > /dev/null; then
+            echo "::error title=No image for $GITHUB_SHA::Tag a commit on main that the release workflow already built."
+            exit 1
+          fi
+          docker buildx imagetools create -t "$IMAGE_REPO:$VERSION" "$source"
+          echo "Tagged $source as $IMAGE_REPO:$VERSION" >> "$GITHUB_STEP_SUMMARY"

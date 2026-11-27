@@ -1,147 +1,155 @@
 # Demo 04 — Release and Rollback
 
 ## Loom Video
-- **Loom Video Status**: **MANUAL FOLLOW-UP REQUIRED** (No Loom recording exists in the repository. A video link was not invented; record a 2–3 minute walkthrough and paste the URL here).
-- **Loom Link**: `[Manual Follow-up: Insert Loom recording URL here once recorded]`
-- **Recording Instructions**: Record a 2–3 minute walkthrough demonstrating:
-  1. The task summary endpoint returning the 4 required pieces of data.
-  2. Executing `uv run python scripts/demo_async_vs_blocking.py` to highlight the side-by-side concurrency timing table (2.43x speedup vs thread pool; ~7.5x vs loop starvation).
-  3. The simulated timeout case triggering an HTTP 504 Gateway Timeout with the standard ADR-001 error response envelope.
-
----
+- **Loom Link**: `[Manual follow-up: insert the Loom URL once recorded]`
+- **What to record (2–3 min)**: a merge producing a `sha-<commit>` image in GHCR, the production
+  job waiting for approval and passing, then on the local stack a bad release caught by the
+  smoke test and `make rollback` bringing the previous version back.
 
 ## Objective
-Demonstrate the concrete engineering impact of asynchronous programming in FastAPI:
-1. Show how non-blocking I/O multiplexing (`asyncio.sleep`) allows multiple concurrent requests to overlap on a single thread.
-2. Demonstrate how synchronous blocking operations (`time.sleep`) offloaded to a bounded thread pool (`max_workers=4`) process in batches, and how accidental synchronous blocking directly inside `async def` starves the event loop (tested in `test_sync_call_inside_async_starves_event_loop`).
-3. Verify that external call timeouts prevent hung dependencies from starving application resources by returning a standard HTTP 504 error response envelope.
+Show that a release is one known image, deployed the same way locally and to production, and
+that a bad release is caught before anyone relies on it and can be undone in one command,
+including across a database migration. Design and reasoning: `docs/session-06/ci-cd.md`
+(Release).
 
----
+Two environments: **local** (your machine, persistent, `make release-deploy`) and
+**production** (GitHub Actions on main, after approval).
 
-## Scenario
-A project dashboard calls a `GET /api/v1/tasks/summary` endpoint to display task metrics (status breakdown, overdue count, assigned count) combined with health telemetry from a simulated external metrics microservice. We compare how the API behaves when multiple team members load their dashboards simultaneously under non-blocking async vs synchronous blocking execution.
-
----
-
-## Commands / Steps Used
+## Steps
 
 ```bash
-# 1. Run integration tests (normal summary, blocking summary, timeouts, workspace isolation, concurrency)
-uv run pytest tests/integration/api/test_task_summary_api.py -v
+cp .env.local.example .env.local         # set real secrets
+make release-deploy TAG=sha-<git sha>    # pull, migrate, start, smoke test
+make release-deploy IMAGE=<bad image>    # deliberately broken release
+make rollback                            # previous good digest, no migration
+make release-status
+```
+Production: merge to main → approve the *production* job. Production rollback: Actions →
+*Release deploy* → Run workflow with `tag: sha-<previous good commit>`.
 
-# 2. Run unit tests for Pydantic schemas
-uv run pytest tests/unit/schemas/test_task_summary_schema.py -v
+## Evidence: CI (after merge)
+- **Image tags in GHCR**: `[Manual follow-up: link the package page / list the sha-<commit> tags]`
+- **Release run** (build → publish → approval → production): `[Manual follow-up: run URL]`
+- **Production rollback run** (Release deploy, run by hand with the previous tag): `[Manual follow-up: run URL]`
 
-# 3. Execute the automated benchmark and demonstration script
-uv run python scripts/demo_async_vs_blocking.py --concurrency 10 --delay 0.2 --timeout 1.0
+## Evidence: local release stack (2026-11-26)
 
-# 4. Direct curl test — Normal async summary
-curl -s -X GET "http://localhost:8000/api/v1/tasks/summary?external_delay=0.2&external_timeout=1.0" \
-  -H "Authorization: Bearer <TOKEN>" \
-  -H "X-Workspace-ID: 1" | jq .
+Test images, built from this branch with distinct `GIT_SHA` build args:
 
-# 5. Direct curl test — External timeout trigger
-curl -s -X GET "http://localhost:8000/api/v1/tasks/summary?external_delay=1.5&external_timeout=0.5" \
-  -H "Authorization: Bearer <TOKEN>" \
-  -H "X-Workspace-ID: 1" | jq .
+| Image | What it is | Digest (prefix) |
+|---|---|---|
+| `good-1` | this branch | `7b4bc8ae2e38` |
+| `migr-2` | `good-1` plus a migration adding a nullable `task.release_note` column | `775ec446a2ca` |
+| `bad-3` | `migr-2` with `todo → in_progress` removed from the workflow rules. It boots and answers `/version`; only real use shows the bug | `8b32277f014e` |
+
+The local stack runs with `ENVIRONMENT=staging` (production-like settings), which is what
+`/version` reports below.
+
+### 1. Why the entrypoint cannot be used for rollback
+After `migr-2` migrated the database, starting `good-1` with the image's normal entrypoint:
+```
+ERROR [alembic.util.messaging] Can't locate revision identified by '0f0f0f0f0f0f'
+FAILED: Can't locate revision identified by '0f0f0f0f0f0f'
+exit 255
+```
+The release stack therefore migrates in a separate one-shot `migrate` service and skips it on
+rollback.
+
+### 2. Deploy a release with a migration
+```
+$ make release-deploy IMAGE=taskflow-api:migr-2
+==> [local] deploying taskflow-api@sha256:775ec446a2ca… (git sha: 2222222222222222222222222222222222222222)
+==> [local] alembic upgrade head
+INFO  [alembic.runtime.migration] Running upgrade cbf85300077c -> 0f0f0f0f0f0f, repro: add a nullable column (rollback demo only)
+==> [local] smoke test
+  [PASS] smoke user exists (signup)
+  [PASS] login as the smoke user returns a token
+  [PASS] GET /version answers
+         serving {'version': 'migr-2', 'git_sha': '2222222222222222222222222222222222222222', 'environment': 'staging'}
+  [PASS] serving the expected build (222222222222)
+  [PASS] a bad token is rejected with 401 and the error envelope
+  [PASS] login as the smoke user returns a token
+  [PASS] GET /auth/me with the token
+  [PASS] create a task
+  [PASS] assign the task to the smoke user
+  [PASS] change the task status todo -> in_progress
+  [PASS] list tasks shows the task with its new status
+  [PASS] a missing task answers 404 with the error envelope
+Smoke test passed (10 checks)
+==> [local] released taskflow-api@sha256:775ec446a2ca…
 ```
 
----
-
-## Expected Behavior
-1. **Async Endpoint (`/tasks/summary`)**:
-   Under 10 concurrent requests with 0.2s external delay, all requests should overlap on the asyncio event loop and complete in $\approx 0.2\text{s} - 0.3\text{s}$ total.
-2. **Blocking Endpoint (`/tasks/summary/blocking`)**:
-   Under 10 concurrent requests with 0.2s external delay, the blocking external call is offloaded to a bounded `ThreadPoolExecutor(max_workers=4)`. Because the pool is limited to 4 workers, requests process in batches ($4 + 4 + 2$), completing in $\approx 3 \times 0.2\text{s} \approx 0.65\text{s}$ total. (By contrast, un-offloaded synchronous calls directly inside `async def` starve the event loop thread, serializing to $\approx 10 \times 0.2\text{s} = 2.0\text{s}$, as demonstrated in `test_sync_call_inside_async_starves_event_loop`).
-3. **Timeout Case**:
-   When external delay exceeds the timeout threshold (e.g. 1.2s delay vs 0.5s timeout), the API should abort at the 0.5s deadline and return HTTP 504 with code `EXTERNAL_SERVICE_TIMEOUT`.
-
----
-
-## Actual Findings
-
-Execution of `scripts/demo_async_vs_blocking.py`:
-
+### 3. A bad release caught by the smoke test
 ```
-===========================================================================
- SIDE-BY-SIDE PERFORMANCE COMPARISON SUMMARY
-===========================================================================
-Endpoint                           | Requests | Total Time   | Avg Latency
------------------------------------+----------+--------------+-------------
-GET /api/v1/tasks/summary (Async)  | 10       |     0.268s  |     0.255s
-GET /tasks/summary/blocking (Sync) | 10       |     0.653s  |     0.403s
----------------------------------------------------------------------------
-Concurrency Speedup: 2.43x faster with non-blocking async!
+$ make release-deploy IMAGE=taskflow-api:bad-3
+==> [local] deploying taskflow-api@sha256:8b32277f014e… (git sha: 3333333333333333333333333333333333333333)
+         serving {'version': 'bad-3', 'git_sha': '3333333333333333333333333333333333333333', 'environment': 'staging'}
+  [PASS] serving the expected build (333333333333)
+  [FAIL] change the task status todo -> in_progress (HTTP 400: {'error': {'code': 'INVALID_STATUS_TRANSITION', 'message': 'Cannot transition task from todo to in_progress', ...}})
+Smoke test FAILED after 7 passing check(s)
+==> [local] DEPLOY FAILED: taskflow-api@sha256:8b32277f014e… is running but did not pass.
+    Last good release: taskflow-api@sha256:775ec446a2ca…
+    Roll back:  make rollback
+```
+The deploy exited non-zero, and `bad-3` was never added to the good list, so no rollback can
+ever pick it.
+
+### 4. Rollback to the previous version
+```
+$ make rollback
+==> [local] rolling back from taskflow-api@sha256:8b32277f014e… to taskflow-api@sha256:775ec446a2ca…
+==> [local] skipping migrations (rollback: this image may not know the newest revision)
+  [PASS] serving the expected build (222222222222)
+Smoke test passed (10 checks)
 ```
 
----
+### 5. Rollback across a migration (expand/contract)
+Rolling back again, from `migr-2` to `good-1`, leaves the newer schema in place:
+```
+$ make rollback
+==> [local] rolling back from taskflow-api@sha256:775ec446a2ca… to taskflow-api@sha256:7b4bc8ae2e38…
+==> [local] skipping migrations (rollback: this image may not know the newest revision)
+         serving {'version': 'good-1', 'git_sha': '1111111111111111111111111111111111111111', 'environment': 'staging'}
+Smoke test passed (10 checks)
+```
+The old code ran on the newer schema. Redeploying `migr-2` afterwards ran `alembic upgrade
+head` with nothing to do: the database had stayed at `0f0f0f0f0f0f` through the rollback.
 
-## Evidence
+### 6. Rollback with a downgrade (the exception)
+```
+$ make rollback REV=cbf85300077c
+==> [local] alembic downgrade cbf85300077c, using the running image taskflow-api@sha256:775ec446a2ca…
+INFO  [alembic.runtime.migration] Running downgrade 0f0f0f0f0f0f -> cbf85300077c, repro: add a nullable column (rollback demo only)
+==> [local] rolling back from taskflow-api@sha256:775ec446a2ca… to taskflow-api@sha256:7b4bc8ae2e38…
+Smoke test passed (10 checks)
 
-### 1. Successful Task Summary Response (HTTP 200 OK)
-All four required pieces of data returned:
-```json
-{
-  "workspace_id": 1,
-  "counts_by_status": {
-    "todo": 4,
-    "in_progress": 8,
-    "review": 0,
-    "done": 0
-  },
-  "overdue_count": 4,
-  "assigned_count": 12,
-  "total_count": 12,
-  "external_service": {
-    "service": "workload_service",
-    "status": "healthy",
-    "latency_ms": 201.1,
-    "mode": "async"
-  }
-}
+alembic_version: cbf85300077c   task rows: 7 (every smoke task kept)   task.release_note: dropped
 ```
 
-### 2. External Call Timeout Error Response (HTTP 504 Gateway Timeout)
-Enforced in 0.520s against a 1.2s delay:
-```json
-{
-  "error": {
-    "code": "EXTERNAL_SERVICE_TIMEOUT",
-    "message": "External service timed out",
-    "details": [
-      {
-        "field": "external_call",
-        "message": "Call exceeded the configured timeout of 0.5s"
-      }
-    ]
-  }
-}
+### 7. Nothing secret in the image
+```
+$ docker image inspect --format '{{range .Config.Env}}{{println .}}{{end}}' taskflow-api:good-1
+PATH=/app/.venv/bin:...   LANG=C.UTF-8   GPG_KEY=7169605F…(CPython signer, public)
+PYTHON_VERSION=3.12.16    PYTHON_SHA256=…  PYTHONDONTWRITEBYTECODE=1  PYTHONUNBUFFERED=1
+APP_VERSION=good-1        GIT_SHA=1111111111111111111111111111111111111111
+$ docker history --no-trunc … | grep -iE "secret|password|token|jwt"   → nothing
+$ ls -a /app → .venv alembic alembic.ini app packages;   no .env file anywhere in the image
 ```
 
-### 3. Automated Test Suite Output
-```
-tests/integration/api/test_task_summary_api.py::test_async_task_summary_success_with_all_four_pieces_of_data PASSED
-tests/integration/api/test_task_summary_api.py::test_blocking_task_summary_success_matches_structure PASSED
-tests/integration/api/test_task_summary_api.py::test_async_summary_external_call_timeout_returns_504 PASSED
-tests/integration/api/test_task_summary_api.py::test_blocking_summary_external_call_timeout_returns_504 PASSED
-tests/integration/api/test_task_summary_api.py::test_summary_workspace_isolation PASSED
-tests/integration/api/test_task_summary_api.py::test_summary_empty_workspace_returns_zero_counts PASSED
-tests/integration/api/test_task_summary_api.py::test_async_summary_concurrency_non_blocking_behavior PASSED
-tests/integration/api/test_task_summary_api.py::test_task_summary_due_date_boundary_conditions PASSED
-tests/integration/api/test_task_summary_api.py::test_task_summary_query_parameter_validation PASSED
-============================== 9 passed in 1.04s ===============================
-```
+## What we learned
+1. **"The image starts" is not "the release works".** `bad-3` booted, migrated and answered
+   `/version`; only a real user action (changing a status) showed it was broken.
+2. **Rollback is a property of the migrations, not of the deploy script.** Redeploying the old
+   image is easy; it only works if that image can run on the newer schema. Expand/contract makes
+   rollback a plain redeploy; anything else needs a downgrade, a backup and luck.
+3. **Running migrations in the entrypoint couples "start" to "migrate".** Fine for local
+   development, but the previous image cannot start at all once the database is ahead of it.
+4. **Pin by digest.** A tag says what a build was called; a digest says what it is. Deploys
+   and rollbacks both use digests so nothing can change under them.
 
----
-
-## What We Learned
-1. **Async allows cooperative I/O multiplexing**: When operations yield via `await asyncio.sleep()`, the server handles concurrent requests on a single thread without CPU contention.
-2. **Blocking code in `async def` is fatal**: A single `time.sleep()` call or blocking library call freezes the entire worker process, creating head-of-line blocking for all subsequent requests.
-3. **Timeouts are critical fault barriers**: Without strict timeouts (`asyncio.wait_for`), slow downstream services cause connection pools to deplete and cascade failures back to the client.
-4. **Where async is NOT enough**: CPU-heavy tasks or long-running workflows (> 2-3s) cannot run safely inside API coroutines; they must be offloaded to Celery background workers.
-
----
-
-## Open Questions
-1. **Caching (Issue #99)**: Should summary metrics be cached in Redis with a short TTL (e.g. 15–30s) or invalidated on task mutations (`create`, `status`, `assign`)?
-2. **Background Jobs (Issue #101)**: Should long-running data exports and batch reports be processed via Celery task queues instead of synchronous/asynchronous HTTP endpoints?
+## Open questions
+1. Should a failed deploy roll back automatically? Today it stops and prints the command, so a
+   person sees the failure first. With real traffic, automatic rollback on a failed smoke test
+   (and on error-rate alerts from #125) would shorten the outage.
+2. The smoke user and its project live in production (and on the local stack). Is a dedicated synthetic tenant (its own
+   workspace) worth adding so smoke data never shows up next to real projects?

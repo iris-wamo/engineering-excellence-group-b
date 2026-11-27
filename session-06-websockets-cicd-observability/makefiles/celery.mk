@@ -1,6 +1,6 @@
 .PHONY: celery-worker
-celery-worker: ## Start Celery worker locally
-	uv run celery -A app.core.celery_app worker -l info
+celery-worker: ## Start Celery worker locally (metrics on 127.0.0.1:9808)
+	PROMETHEUS_MULTIPROC_DIR=$${PROMETHEUS_MULTIPROC_DIR:-$$(mktemp -d)} uv run celery -A app.core.celery_app worker -l info
 
 .PHONY: celery-beat
 celery-beat: ## Start Celery Beat periodic scheduler locally

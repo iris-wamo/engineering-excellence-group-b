@@ -17,3 +17,7 @@ test-auth: ## Run auth tests (needs PostgreSQL and MongoDB)
 .PHONY: test-cov
 test-cov: ## Run the full test suite with coverage
 	uv run pytest --cov=app --cov-report=term-missing
+
+.PHONY: load-test
+load-test: ## Load one endpoint and check p95/error targets (CLIENTS=20 DURATION=60 URL=...)
+	uv run python -m scripts.load_test --clients $(or $(CLIENTS),20) --duration $(or $(DURATION),60) $(if $(URL),--url $(URL))
